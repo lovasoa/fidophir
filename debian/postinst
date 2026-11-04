@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+if [ "$1" = configure ]; then
+    /usr/libexec/fidophir-package-setup prepare deb-systemd-invoke
+fi
+#DEBHELPER#
+if [ "$1" = configure ]; then
+    /usr/libexec/fidophir-package-setup activate deb-systemd-invoke
+fi

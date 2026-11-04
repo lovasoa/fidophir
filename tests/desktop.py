@@ -89,11 +89,11 @@ def serve(address, folder):
         properties = {
             "Id":GLib.Variant("s",path.rsplit("/",1)[-1]),
             "User":GLib.Variant("(uo)",(os.geteuid(),"/org/freedesktop/login1/user/_1000")),
-            "Seat":GLib.Variant("(so)",("seat0","/org/freedesktop/login1/seat/seat0")),
+            "Seat":GLib.Variant("(so)",("" if current == "no_seat" else "seat1","/org/freedesktop/login1/seat/seat0")),
             "Active":GLib.Variant("b",current != "inactive"),
             "Remote":GLib.Variant("b",current == "remote"),
             "LockedHint":GLib.Variant("b",current == "locked" or state["locked"]),
-            "Class":GLib.Variant("s","user"),"Type":GLib.Variant("s","wayland"),
+            "Class":GLib.Variant("s","greeter" if current == "greeter" else "user"),"Type":GLib.Variant("s","tty" if current == "tty" else "wayland"),
         }
         return properties[name]
 
@@ -147,7 +147,7 @@ def main(binary):
             sign(ctap,"12345678",key)
             print("PASS: real GIO login1/polkit wire flow, RP context and successful approval",flush=True)
 
-            for mode in ("silent","retained","temporary","deny","locked","inactive","remote","other_uid","ambiguous","no_agent","locks_after"):
+            for mode in ("silent","retained","temporary","deny","locked","inactive","remote","other_uid","ambiguous","no_agent","locks_after","no_seat","greeter","tty"):
                 (folder / "mode").write_text(mode)
                 expect(CtapError.ERR.OPERATION_DENIED,lambda:register(ctap,"12345678",b"must-not-register"))
                 print(f"PASS: native adapter rejects {mode}",flush=True)

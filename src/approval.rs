@@ -57,12 +57,7 @@ struct Session {
     path: ObjectPath,
 }
 
-async fn eligible(
-    connection: &DBusConnection,
-    session: &Session,
-    uid: u32,
-    seat: &str,
-) -> Result<bool> {
+async fn eligible(connection: &DBusConnection, session: &Session, uid: u32) -> Result<bool> {
     let reply = call(
         connection,
         "org.freedesktop.login1",
@@ -87,7 +82,7 @@ async fn eligible(
     let text = |key| p.get(key).and_then(|v| v.get::<String>());
     let flag = |key| p.get(key).and_then(|v| v.get::<bool>());
     Ok(user == Some(uid)
-        && session_seat.as_deref() == Some(seat)
+        && session_seat.as_ref().is_some_and(|s| !s.is_empty())
         && text("Id").as_deref() == Some(&session.id)
         && flag("Active") == Some(true)
         && flag("Remote") == Some(false)
@@ -99,7 +94,6 @@ async fn eligible(
 async fn authorize(
     connection: DBusConnection,
     uid: u32,
-    seat: String,
     cancellation: String,
     operation: String,
     rp: String,
@@ -118,12 +112,12 @@ async fn authorize(
         .get::<(Vec<(String, u32, String, String, ObjectPath)>,)>()
         .ok_or(Error::Invalid("invalid login1 session list"))?;
     let mut selected = None;
-    for (id, owner, _, session_seat, path) in sessions {
-        if owner != uid || session_seat != seat {
+    for (id, owner, _, _, path) in sessions {
+        if owner != uid {
             continue;
         }
         let session = Session { id, path };
-        if eligible(&connection, &session, uid, &seat).await? {
+        if eligible(&connection, &session, uid).await? {
             if selected.is_some() {
                 return Err(Error::Invalid("ambiguous desktop session"));
             }
@@ -167,7 +161,7 @@ async fn authorize(
             return Err(Error::Invalid("fresh desktop authorization refused"));
         }
     }
-    if !eligible(&connection, &session, uid, &seat).await? {
+    if !eligible(&connection, &session, uid).await? {
         return Err(Error::Invalid("desktop session changed"));
     }
     Ok(())
@@ -184,7 +178,6 @@ pub struct Approval {
     io: SharedIo,
     connection: Option<DBusConnection>,
     uid: u32,
-    seat: String,
     pending: Option<Pending>,
     start_error: bool,
     operation: Option<&'static str>,
@@ -194,13 +187,12 @@ pub struct Approval {
 }
 
 impl Approval {
-    pub fn new(io: SharedIo, uid: u32, seat: String) -> Result<Self> {
+    pub fn new(io: SharedIo, uid: u32) -> Result<Self> {
         let connection = gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE)?;
         Ok(Self {
             io,
             connection: Some(connection),
             uid,
-            seat,
             pending: None,
             start_error: false,
             operation: None,
@@ -215,7 +207,6 @@ impl Approval {
             io,
             connection: None,
             uid: 0,
-            seat: String::new(),
             pending: None,
             start_error: false,
             operation: None,
@@ -292,10 +283,9 @@ impl UserPresence for Approval {
             .expect("native approval connection")
             .clone();
         let uid = self.uid;
-        let seat = self.seat.clone();
         let cancellation = id.clone();
         let task = glib::MainContext::default().spawn_local(async move {
-            let answer = authorize(connection, uid, seat, cancellation, operation, rp).await;
+            let answer = authorize(connection, uid, cancellation, operation, rp).await;
             if live.get() {
                 *output.borrow_mut() = Some(answer);
             }

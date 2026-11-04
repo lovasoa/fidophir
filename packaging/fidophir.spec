@@ -20,12 +20,13 @@ BuildRequires:  tpm2-tss-devel
 BuildRequires:  systemd-rpm-macros
 Requires:       systemd
 Requires:       systemd-udev
+Requires:       kmod
 Requires:       polkit
 Requires:       tpm2-tss
 %{?systemd_requires}
 
 %description
-A single-owner resident ES256 authenticator using OpenSK, TPM2-TSS and
+A per-user resident ES256 authenticator using OpenSK, TPM2-TSS and
 native login1/polkit desktop approval. Experimental; physical-device and
 browser acceptance checks are required before real-account use.
 
@@ -48,25 +49,34 @@ mkdir -p %{buildroot}%{_licensedir}/%{name}/third-party
 cp -a licenses/. %{buildroot}%{_licensedir}/%{name}/third-party/
 
 %post
-%systemd_post %{name}.service
+%{_libexecdir}/fidophir-package-setup prepare systemctl
+%systemd_post fidophir.target
+# RPM presets configure enablement; first installation also activates this package.
+if [ "$1" -eq 1 ] && [ -d /run/systemd/system ] && systemctl --quiet is-enabled fidophir.target; then
+    systemctl start fidophir.target || :
+fi
+%{_libexecdir}/fidophir-package-setup activate systemctl
 
 %preun
-%systemd_preun %{name}.service
+%systemd_preun fidophir.target
 
 %postun
-%systemd_postun_with_restart %{name}.service
+%systemd_postun_with_restart fidophir.target
 
 %files
 %{_libexecdir}/fidophir
-%{_unitdir}/fidophir.service
+%{_libexecdir}/fidophir-package-setup
+%{_unitdir}/fidophir@.service
+%{_unitdir}/fidophir.target
+%{_unitdir}/user@.service.wants/fidophir@.service
+%{_presetdir}/00-fidophir.preset
 %{_sysusersdir}/fidophir.conf
 %{_modulesloaddir}/fidophir.conf
 %{_udevrulesdir}/72-fidophir.rules
-%{_presetdir}/00-fidophir.preset
 %{_datadir}/polkit-1/actions/org.local.fidophir.policy
 %{_docdir}/fidophir/
 %license %{_licensedir}/fidophir/
 
 %changelog
 * Wed Nov 04 2026 Fidophir contributors - 0.1.0-1
-- Initial experimental implementation; no automatic activation.
+- Per-user authenticators activated with systemd user managers.

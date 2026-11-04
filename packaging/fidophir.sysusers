@@ -1,3 +1,2 @@
 # Install as /usr/lib/sysusers.d/fidophir.conf
 u fidophir - "TPM passkey authenticator" /var/lib/fidophir /usr/sbin/nologin
-g fidophir-client -

@@ -18,7 +18,7 @@ override_dh_auto_install:
 
 override_dh_installsystemd:
 	dh_installsysusers
-	dh_installsystemd --no-enable --no-start
+	dh_installsystemd fidophir.target
 
 override_dh_auto_clean:
 	rm -rf target .cargo-home

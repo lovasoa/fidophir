@@ -7,7 +7,7 @@ Fidophir is an experimental Linux host for the [OpenSK](https://github.com/googl
 - `src/env.rs` and `src/main.rs` connect OpenSK to the Linux host and run its protocol loop.
 - `src/io.rs` exposes a virtual HID device. `src/backend.rs` runs blocking storage and TPM work without stopping protocol keepalives.
 - `src/tpm.rs` creates and uses TPM keys. `src/state.rs` stores records on disk.
-- `src/approval.rs` asks login1 and polkit for a fresh approval in the configured owner's local, active, unlocked session.
+- `src/approval.rs` asks login1 and polkit for a fresh approval in the instance user's local, active, unlocked graphical session.
 - [The OpenSK patch](patches/README.md) adds the hooks needed for TPM-backed PIN verification and signing.
 - [Packaging](packaging/README.md) provides the service, permissions and build recipes.
 
@@ -27,8 +27,8 @@ An old copy of the TPM parent can still be used with its old PIN on the same TPM
 
 ## Storage and failure handling
 
-State is stored under `/var/lib/fidophir/v1/` in private, bounded files, one per OpenSK record. A directory lock prevents concurrent instances. Each replacement is atomic and durable subject to filesystem guarantees; deletion synchronizes the directory. A complete operation may update more than one record and is not a transaction. Stop the service before making a consistent backup. Unknown layouts or invalid records fail closed.
+State is stored separately for each UID under `/var/lib/fidophir-users/UID/v1/` (legacy owners retain `/var/lib/fidophir/v1/`) in private, bounded files, one per OpenSK record. systemd creates and owns the state directory and passes its absolute path in `$STATE_DIRECTORY`. A directory lock prevents concurrent instances. Each replacement is atomic and durable subject to filesystem guarantees; deletion synchronizes the directory. A complete operation may update more than one record and is not a transaction. Stop the service before making a consistent backup. Unknown layouts or invalid records fail closed.
 
 The protocol loop serializes operations. A bounded worker handles TPM and filesystem requests; the loop continues to send keepalives and process cancellation. A canceled TPM result is discarded, while an in-progress durable write finishes before cancellation is honored. Unexpected storage or TPM failures stop the process; there is no software signing fallback. Restart clears transient grants and preserves state.
 
-The service runs as a dedicated unprivileged account with access to the TPM and UHID devices. The desktop user is granted access only to the generated authenticator device through `fidophir-client`. The systemd unit restricts filesystem, device and network access. These controls do not isolate Fidophir from root or the kernel. Physical device permissions and SELinux behavior still require the checks in [validation](VALIDATION.md).
+The service runs as a dedicated unprivileged account with access to the TPM and UHID devices. A systemd template dependency follows each user manager and an aggregate target handles package lifecycle; each instance publishes a separate authenticator with its UID as the HID unique ID. udev grants only that UID access to its device, without a shared client group or session ACL. Private stores and PINs separate desktop users; instances share the trusted service account and TPM lockout. The systemd unit restricts filesystem, device and network access. These controls do not isolate Fidophir from root or the kernel. Physical device permissions and SELinux behavior still require the checks in [validation](VALIDATION.md).

@@ -6,7 +6,7 @@ Fidophir exposes a Linux computer's TPM (a security chip found in most modern co
 
 **Experimental:** Fidophir was built for me, Ophir. I intend to use it and fix bugs and security issues as I find them, but offer no guarantee whatsoever. Do not rely on it as your only way into an account. See [validation](VALIDATION.md).
 
-Fidophir supports up to 300 passkeys on one computer; they cannot be synced or moved to another TPM.
+Fidophir supports up to 300 passkeys per user on one computer; they cannot be synced or moved to another TPM.
 
 ## What does it protect against?
 
@@ -42,7 +42,7 @@ See [design](DESIGN.md) for the security boundaries and implementation.
 
 ## Install for testing
 
-Installation requires administrator access. The package does not start the service or enroll a passkey. On Fedora 44:
+Installation requires administrator access. The package configures and starts Fidophir automatically for each logged-in user. On Fedora 44:
 
 ```sh
 wget https://github.com/lovasoa/fidophir/releases/latest/download/fidophir.rpm
@@ -56,29 +56,11 @@ wget https://github.com/lovasoa/fidophir/releases/latest/download/fidophir.deb
 sudo apt install ./fidophir.deb
 ```
 
-For first-time setup, configure the owner. Existing users should keep their configuration. Replace `YOUR_DESKTOP_USER` with your login name. Find its numeric ID with `id -u YOUR_DESKTOP_USER`, and your current seat with `loginctl show-session "$XDG_SESSION_ID" -p Seat --value`. Enter those values as `FIDOPHIR_OWNER_UID` and `FIDOPHIR_OWNER_SEAT` in the editor; verify them before starting the service.
+Each user gets a separate authenticator, PIN and set of passkeys. Access is restricted to that user's account; desktop approval requires a local, active, unlocked graphical session. No owner configuration, group changes or logout is needed.
 
-```sh
-sudo install -d -m 0755 /etc/fidophir
-sudo test -e /etc/fidophir/owner.conf || sudo install -m 0600 /usr/share/doc/fidophir/owner.conf.example /etc/fidophir/owner.conf
-sudoedit /etc/fidophir/owner.conf
-sudo usermod -aG fidophir-client YOUR_DESKTOP_USER
-sudo modprobe uhid
-sudo udevadm control --reload
-sudo udevadm trigger --subsystem-match=misc --sysname-match=uhid
-```
+Complete the [physical acceptance checklist](VALIDATION.md#physical-acceptance-not-yet-run) before relying on Fidophir; use disposable accounts during testing. Open `about:webauthn` in Firefox to set the Fidophir PIN, then use a website's passkey setup. This PIN is separate from your desktop login password; the desktop approval may also ask for your login password or fingerprint. If startup fails, inspect `journalctl -u "fidophir@$(id -u).service"`.
 
-Add the desktop user only to `fidophir-client`, not to `fidophir` or `tss`.
-
-Log out and back in so the group change takes effect, then run:
-
-```sh
-sudo systemctl start fidophir.service
-```
-
-Complete the [physical acceptance checklist](VALIDATION.md#physical-acceptance-not-yet-run) before relying on Fidophir; use disposable accounts during testing. Open `about:webauthn` in Firefox to set the Fidophir PIN, then use a website's passkey setup. This PIN is separate from your desktop login password; the desktop approval may also ask for your login password or fingerprint. If startup fails, inspect `journalctl -u fidophir.service`. Only enable automatic startup (`sudo systemctl enable fidophir.service`) after acceptance.
-
-Stopping or removing the service preserves `/var/lib/fidophir`. There is no automatic reset or migration tool. If you lose the PIN, an administrator must stop the service and remove its local state before starting over; this removes all local Fidophir passkeys. Use each website's recovery method to enroll new passkeys. Debian package and build details are in [packaging](packaging/README.md).
+Stopping or removing the service preserves `/var/lib/fidophir-users` and legacy `/var/lib/fidophir`. There is no automatic reset or migration tool. If you lose the PIN, an administrator must stop the service and remove its local state before starting over; this removes all local Fidophir passkeys. Use each website's recovery method to enroll new passkeys. Debian package and build details are in [packaging](packaging/README.md).
 
 ## Build and test
 

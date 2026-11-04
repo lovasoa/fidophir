@@ -1,0 +1,53 @@
+#!/bin/sh
+# Installation only. Distribution tools create accounts; systemd owns lifecycle.
+set -eu
+phase=$1
+invoke=$2
+case "$phase" in
+    prepare)
+        # Preserve an existing owner's store through systemd configuration, never
+        # by moving credentials or sourcing the old EnvironmentFile as shell code.
+        if [ -f /etc/fidophir/owner.conf ]; then
+            uid=$(sed -nE "s/^[[:space:]]*FIDOPHIR_OWNER_UID[[:space:]]*=[[:space:]]*([\"']?)([0-9]+)\\1[[:space:]]*$/\\2/p" /etc/fidophir/owner.conf)
+            case "$uid" in
+                ''|0|*[!0-9]*) echo 'fidophir: invalid legacy owner configuration' >&2; exit 1 ;;
+            esac
+            uid=$(printf '%s' "$uid" | sed 's/^0*//')
+            case "$uid" in '') exit 1 ;; esac
+            directory="/etc/systemd/system/fidophir@$uid.service.d"
+            if [ ! -e "$directory/owner-state.conf" ]; then
+                install -d -m 0755 "$directory"
+                # No secret data; keep administrator overrides on subsequent upgrades.
+                printf '[Service]\nStateDirectory=\nStateDirectory=fidophir\n' > "$directory/owner-state.conf"
+                chmod 0644 "$directory/owner-state.conf"
+            fi
+        fi
+        if [ -d /run/systemd/system ]; then
+            "$invoke" stop fidophir.service || true
+            systemctl disable fidophir.service >/dev/null 2>&1 || true
+        fi
+        ;;
+    activate)
+        [ -d /run/systemd/system ] || exit 0
+        modprobe uhid || true
+        udevadm control --reload-rules || true
+        udevadm trigger --settle --action=change --subsystem-match=misc --sysname-match=uhid || true
+        # Respect a masked/stopped target and Debian's policy-rc.d decision.
+        systemctl --quiet is-active fidophir.target || exit 0
+        # deb-systemd-invoke refuses dependency-driven template instances, so
+        # consult Debian's standard policy interface before this activation step.
+        if [ "$invoke" = deb-systemd-invoke ] && [ -x /usr/sbin/policy-rc.d ]; then
+            status=0
+            /usr/sbin/policy-rc.d fidophir.target start || status=$?
+            case "$status" in 0|104) ;; *) exit 0 ;; esac
+        fi
+        # A newly installed dependency does not activate already-running managers.
+        # Routine upgrades/removal operate on the target, without enumerating instances.
+        for unit in $(systemctl list-units --type=service --state=running --no-legend --plain 'user@*.service' | awk '{print $1}'); do
+            uid=${unit#user@}; uid=${uid%.service}
+            case "$uid" in ''|0|*[!0-9]*) continue ;; esac
+            systemctl start "fidophir@$uid.service" || true
+        done
+        ;;
+    *) exit 1 ;;
+esac

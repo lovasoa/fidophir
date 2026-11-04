@@ -14,36 +14,32 @@ fn run() -> Result<()> {
             "run through the unprivileged fidophir system service",
         ));
     }
-    if std::env::args_os().len() != 1 {
-        return Err(Error::Invalid("fidophir takes no command-line options"));
-    }
     nix::sys::prctl::set_dumpable(false).map_err(std::io::Error::from)?;
-    let uid: u32 = std::env::var("FIDOPHIR_OWNER_UID")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .filter(|uid| *uid != 0 && *uid != nix::unistd::geteuid().as_raw())
-        .ok_or(Error::Invalid(
-            "FIDOPHIR_OWNER_UID must name a non-service, non-root owner",
-        ))?;
-    let seat = std::env::var("FIDOPHIR_OWNER_SEAT")
-        .map_err(|_| Error::Invalid("missing FIDOPHIR_OWNER_SEAT"))?;
-    if seat.is_empty()
-        || seat.len() > 64
-        || !seat
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-    {
-        return Err(Error::Invalid("invalid owner seat"));
+    let args: Vec<String> = std::env::args().collect();
+    let uid = if args.len() == 3 && args[1] == "--user" {
+        args[2]
+            .parse::<u32>()
+            .ok()
+            .filter(|uid| *uid != 0 && *uid != nix::unistd::geteuid().as_raw())
+    } else {
+        None
     }
+    .ok_or(Error::Invalid("invalid user instance"))?;
+    let root = std::env::var_os("STATE_DIRECTORY")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute() && !p.as_os_str().as_encoded_bytes().contains(&b':'))
+        .ok_or(Error::Invalid(
+            "systemd must supply one absolute STATE_DIRECTORY",
+        ))?;
     let context = glib::MainContext::default();
     let _guard = context
         .acquire()
         .map_err(|_| Error::Invalid("desktop main context unavailable"))?;
     let io = Io::shared();
-    let mut env = LinuxEnv::new(PathBuf::from("/var/lib/fidophir"), io.clone(), uid, seat)?;
+    let mut env = LinuxEnv::new(root, io.clone(), uid)?;
     let mut state = CtapState::new(&mut env);
     let mut hid = MainHid::default();
-    io.borrow_mut().publish()?;
+    io.borrow_mut().publish(uid)?;
     eprintln!("fidophir: authenticator ready");
     loop {
         dispatch_desktop();

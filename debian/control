@@ -9,8 +9,8 @@ Homepage: https://github.com/lovasoa/fidophir
 
 Package: fidophir
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, systemd, udev, polkitd, libtss2-tcti-device0t64, tpm-udev
+Depends: ${shlibs:Depends}, ${misc:Depends}, systemd, kmod, udev, polkitd, libtss2-tcti-device0t64, tpm-udev
 Description: experimental TPM-backed FIDO passkey authenticator
- A single-owner resident ES256 authenticator using OpenSK, TPM2-TSS and
- native login1/polkit desktop approval. Configure an owner and start the
- service manually after reviewing the physical-device acceptance checklist.
+ A per-user resident ES256 authenticator using OpenSK, TPM2-TSS and
+ native login1/polkit desktop approval. Each user receives a private
+ authenticator automatically through their systemd user manager.

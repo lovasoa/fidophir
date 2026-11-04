@@ -109,9 +109,9 @@ pub struct LinuxEnv {
 }
 
 impl LinuxEnv {
-    pub fn new(root: PathBuf, io: SharedIo, uid: u32, seat: String) -> Result<Self> {
+    pub fn new(root: PathBuf, io: SharedIo, uid: u32) -> Result<Self> {
         let backend = Backend::new(root, io.clone())?;
-        let approval = Approval::new(io.clone(), uid, seat)?;
+        let approval = Approval::new(io.clone(), uid)?;
         Self::build(backend, approval, io)
     }
     #[cfg(any(test, feature = "integration-tests"))]
@@ -123,7 +123,7 @@ impl LinuxEnv {
     #[cfg(feature = "integration-tests")]
     pub fn for_test_native(root: PathBuf, config: &str, io: SharedIo) -> Result<Self> {
         let backend = Backend::for_test(root, config, io.clone())?;
-        let approval = Approval::new(io.clone(), nix::unistd::geteuid().as_raw(), "seat0".into())?;
+        let approval = Approval::new(io.clone(), nix::unistd::geteuid().as_raw())?;
         Self::build(backend, approval, io)
     }
     fn build(backend: Backend, approval: Approval, io: SharedIo) -> Result<Self> {
