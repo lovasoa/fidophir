@@ -65,6 +65,9 @@ fi
 if [ "$1" -eq 0 ] && [ -d /run/systemd/system ]; then
     udevadm control --reload-rules || :
     udevadm trigger --settle --action=change --subsystem-match=misc --sysname-match=uhid || :
+    if [ "$(stat -c '%%G' /dev/uhid 2>/dev/null)" = fidophir ]; then
+        chmod 0600 /dev/uhid && chgrp root /dev/uhid || :
+    fi
 fi
 
 %files
