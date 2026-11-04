@@ -6,7 +6,7 @@ Fidophir exposes a Linux computer's TPM (a security chip found in most modern co
 
 **Experimental:** Fidophir was built for me, Ophir. I intend to use it and fix bugs and security issues as I find them, but offer no guarantee whatsoever. Do not rely on it as your only way into an account. See [validation](VALIDATION.md).
 
-Fidophir supports up to 64 passkeys on one computer; they cannot be synced or moved to another TPM.
+Fidophir supports up to 300 passkeys on one computer; they cannot be synced or moved to another TPM.
 
 ## What does it protect against?
 

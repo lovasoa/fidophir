@@ -135,7 +135,7 @@ impl LinuxEnv {
             allows_pin_protocol_v1: false,
             enforce_always_uv: true,
             default_min_pin_length: 8,
-            max_supported_resident_keys: 64,
+            max_supported_resident_keys: opensk::api::persist::keys::CREDENTIALS.len(),
             use_signature_counter: false,
             default_cred_protect: Some(CredentialProtectionPolicy::UserVerificationRequired),
             ..DEFAULT_CUSTOMIZATION

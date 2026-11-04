@@ -122,6 +122,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--expiry", action="store_true", help="also wait 31s to check real token expiry")
+    parser.add_argument("--capacity", action="store_true", help="exercise a full credential store")
     args = parser.parse_args()
     os.environ["TSS2_LOG"] = "all+NONE"
     with tempfile.TemporaryDirectory(prefix="fidophir-interop-") as directory:
@@ -178,6 +179,32 @@ def main():
                 second = register(ctap,pin,b"second-account")
                 sign(ctap,pin,first)
                 sign(ctap,pin,second)
+                if args.capacity:
+                    pipe.close(); pipe = None
+                    records = state / "v1"
+                    template = cbor.decode((records / "01700").read_bytes())
+                    # Synthetic records reuse a test key but have distinct IDs and users.
+                    for key in range(1702, 1999):
+                        record = dict(template)
+                        record[0] = key.to_bytes(32, "big")
+                        record[3] = key.to_bytes(4, "big")
+                        record[7] = key
+                        path = records / f"{key:05d}"
+                        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                        with os.fdopen(fd, "wb") as output:
+                            output.write(cbor.encode(record))
+                    pipe = Pipe(args.binary, state, tcti)
+                    ctap = Ctap2(pipe)
+                    sign(ctap, pin, first)
+                    last = register(ctap, pin, b"capacity-last")
+                    sign(ctap, pin, last)
+                    expect(CtapError.ERR.KEY_STORE_FULL, lambda: register(ctap, pin, b"capacity-overflow"))
+                    pipe.close(); pipe = None
+                    for key in range(1702, 2000):
+                        (records / f"{key:05d}").unlink()
+                    pipe = Pipe(args.binary, state, tcti)
+                    ctap = Ctap2(pipe)
+                    print("PASS: 300 credentials, full-store rejection and existing credential after restart", flush=True)
                 assert not (state / "v1" / "02045").exists(), "software PIN verifier was written"
                 h = hashlib.sha256(pin.encode()).digest()[:16]
                 assert all(h not in f.read_bytes() for f in (state / "v1").iterdir())

@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 
 pub const PARENT: usize = 65536;
 pub const MAX_VALUE: usize = 4096;
-const MAX_RECORDS: usize = 128;
 
 pub struct Store {
     path: PathBuf,
@@ -136,9 +135,6 @@ impl Store {
             let key = parse_name(&name).ok_or(Error::Invalid("unexpected state entry"))?;
             check(&fs::symlink_metadata(entry.path())?, self.uid, false)?;
             keys.push(key);
-            if keys.len() > MAX_RECORDS {
-                return Err(Error::Invalid("too many state records"));
-            }
         }
         keys.sort_unstable();
         Ok(keys)
@@ -148,10 +144,7 @@ impl Store {
         if bytes.len() > MAX_VALUE {
             return Err(Error::Invalid("oversized state record"));
         }
-        let exists = self.read(key)?.is_some();
-        if !exists && self.list()?.len() >= MAX_RECORDS {
-            return Err(Error::Invalid("state store is full"));
-        }
+        self.read(key)?;
         glib::file_set_contents_full(
             self.path.join(key_name(key)?),
             bytes,
@@ -241,18 +234,23 @@ mod tests {
     }
 
     #[test]
-    fn bounded_records_and_validated_crash_residue() {
+    fn credential_capacity_and_validated_crash_residue() {
         let root = Directory::new();
         let store = Store::open(&root.0).unwrap();
         assert!(store.write(4096, b"invalid key").is_err());
         assert!(store.write(0, &[0; MAX_VALUE + 1]).is_err());
-        for key in 100..100 + MAX_RECORDS {
+        for key in opensk::api::persist::keys::CREDENTIALS {
             store.write(key, b"record").unwrap();
         }
-        assert!(store.write(PARENT, b"full").is_err());
-        store.write(100, b"replacement when full").unwrap();
-        store.remove(100).unwrap();
+        store.write(100, b"additional state").unwrap();
         store.write(PARENT, b"parent").unwrap();
+        drop(store);
+        let store = Store::open(&root.0).unwrap();
+        assert_eq!(
+            store.list().unwrap().len(),
+            opensk::api::persist::keys::CREDENTIALS.len() + 2
+        );
+        assert_eq!(store.read(1999).unwrap().unwrap(), b"record");
         drop(store);
         let residue = root.0.join("v1/00100.A1b2C3");
         OpenOptions::new()
