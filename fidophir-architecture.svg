@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1400" height="1400" viewBox="0 0 1400 1400" role="img" aria-label="Fidophir architecture showing the website, Firefox, Linux virtual HID security key, Fidophir service, TPM chip, and polkit approval">
+<desc>Website server exchanges WebAuthn over HTTPS with Firefox. Firefox exchanges FIDO2 CTAP messages over a Linux UHID virtual security-key device with Fidophir. Fidophir uses the TPM for PIN authorization and cryptographic signing, and login1, polkit, and GNOME for desktop approval. This is a conceptual communication diagram, not a physical wiring schematic.</desc>
+<defs>
+ <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F8FAFE"/><stop offset="1" stop-color="#F4F8FD"/></linearGradient>
+ <linearGradient id="fid" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#315DB6"/><stop offset="1" stop-color="#1B3F89"/></linearGradient>
+ <marker id="arrowBlue" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="3.8" markerHeight="3.8" orient="auto-start-reverse"><path d="M1 1 L11 6 L1 11 Z" fill="#407CC1"/></marker>
+ <marker id="arrowTeal" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="3.8" markerHeight="3.8" orient="auto-start-reverse"><path d="M1 1 L11 6 L1 11 Z" fill="#128A8A"/></marker>
+ <marker id="arrowPurple" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="3.8" markerHeight="3.8" orient="auto-start-reverse"><path d="M1 1 L11 6 L1 11 Z" fill="#8963B7"/></marker>
+ <symbol id="ff" viewBox="0 0 24 24"><path d="M8.824 7.287c.008 0 .004 0 0 0zm-2.8-1.4c.006 0 .003 0 0 0zm16.754 2.161c-.505-1.215-1.53-2.528-2.333-2.943.654 1.283 1.033 2.57 1.177 3.53l.002.02c-1.314-3.278-3.544-4.6-5.366-7.477-.091-.147-.184-.292-.273-.446a3.545 3.545 0 01-.13-.24 2.118 2.118 0 01-.172-.46.03.03 0 00-.027-.03.038.038 0 00-.021 0l-.006.001a.037.037 0 00-.01.005L15.624 0c-2.585 1.515-3.657 4.168-3.932 5.856a6.197 6.197 0 00-2.305.587.297.297 0 00-.147.37c.057.162.24.24.396.17a5.622 5.622 0 012.008-.523l.067-.005a5.847 5.847 0 011.957.222l.095.03a5.816 5.816 0 01.616.228c.08.036.16.073.238.112l.107.055a5.835 5.835 0 01.368.211 5.953 5.953 0 012.034 2.104c-.62-.437-1.733-.868-2.803-.681 4.183 2.09 3.06 9.292-2.737 9.02a5.164 5.164 0 01-1.513-.292 4.42 4.42 0 01-.538-.232c-1.42-.735-2.593-2.121-2.74-3.806 0 0 .537-2 3.845-2 .357 0 1.38-.998 1.398-1.287-.005-.095-2.029-.9-2.817-1.677-.422-.416-.622-.616-.8-.767a3.47 3.47 0 00-.301-.227 5.388 5.388 0 01-.032-2.842c-1.195.544-2.124 1.403-2.8 2.163h-.006c-.46-.584-.428-2.51-.402-2.913-.006-.025-.343.176-.389.206-.406.29-.787.616-1.136.974-.397.403-.76.839-1.085 1.303a9.816 9.816 0 00-1.562 3.52c-.003.013-.11.487-.19 1.073-.013.09-.026.181-.037.272a7.8 7.8 0 00-.069.667l-.002.034-.023.387-.001.06C.386 18.795 5.593 24 12.016 24c5.752 0 10.527-4.176 11.463-9.661.02-.149.035-.298.052-.448.232-1.994-.025-4.09-.753-5.844z"/></symbol>
+ <symbol id="gh" viewBox="0 0 24 24"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></symbol>
+ <symbol id="ms" viewBox="0 0 24 24"><path x="0" d="M0 0h11v11H0z" fill="#F25022"/><path d="M13 0h11v11H13z" fill="#7FBA00"/><path d="M0 13h11v11H0z" fill="#00A4EF"/><path d="M13 13h11v11H13z" fill="#FFB900"/></symbol>
+ <symbol id="gg" viewBox="0 0 24 24">
+  <path d="M21.35 12.24c0-.74-.07-1.45-.2-2.14H12v4.05h5.23a4.47 4.47 0 0 1-1.94 2.93v2.44h3.14c1.84-1.69 2.92-4.18 2.92-7.28z" fill="#4285F4"/>
+  <path d="M12 21.7c2.63 0 4.84-.87 6.45-2.36l-3.14-2.44c-.87.58-1.98.93-3.31.93-2.55 0-4.71-1.72-5.48-4.04H3.3v2.51A9.71 9.71 0 0 0 12 21.7z" fill="#34A853"/>
+  <path d="M6.52 13.8a5.85 5.85 0 0 1 0-3.6V7.7H3.3a9.7 9.7 0 0 0 0 8.6z" fill="#FBBC05"/>
+  <path d="M12 6.17c1.43 0 2.71.49 3.73 1.47l2.79-2.79A9.3 9.3 0 0 0 12 2.3a9.71 9.71 0 0 0-8.7 5.4l3.22 2.5C7.29 7.89 9.45 6.17 12 6.17z" fill="#EA4335"/>
+ </symbol>
+ <symbol id="server" viewBox="0 0 64 64">
+  <g fill="none" stroke="#4277BA" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+  <rect x="8" y="6" width="48" height="15" rx="4"/><rect x="8" y="25" width="48" height="15" rx="4"/><rect x="8" y="44" width="48" height="15" rx="4"/>
+  <path d="M29 13.5h18M29 32.5h18M29 51.5h18"/>
+  </g><g fill="#4277BA"><circle cx="19" cy="13.5" r="2.5"/><circle cx="19" cy="32.5" r="2.5"/><circle cx="19" cy="51.5" r="2.5"/></g>
+ </symbol>
+ <symbol id="usbplug" viewBox="0 0 64 64">
+  <g fill="none" stroke="#3F7BBF" stroke-width="3.3" stroke-linejoin="round" stroke-linecap="round">
+   <rect x="17" y="8" width="30" height="24" rx="4"/>
+   <path d="M24 14v10m16-10v10M17 25h30M23 32v14a9 9 0 0 0 18 0V32M32 55v5"/>
+  </g>
+  <rect x="27" y="14" width="4" height="7" rx="1.5" fill="#3F7BBF"/>
+  <rect x="34" y="14" width="4" height="7" rx="1.5" fill="#3F7BBF"/>
+ </symbol>
+ <symbol id="shieldkey" viewBox="0 0 64 64">
+  <g fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+   <path d="M32 4 55 13v18c0 14-9 24-23 31C18 55 9 45 9 31V13z"/>
+   <circle cx="25" cy="29" r="6"/><path d="M31 29h17m-7 0v7m6-7v5"/>
+  </g>
+ </symbol>
+ <symbol id="chip" viewBox="0 0 64 64">
+  <g fill="none" stroke="#13878A" stroke-width="3.0" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="16" y="16" width="32" height="32" rx="5"/>
+    <rect x="25" y="25" width="14" height="14" rx="2"/>
+    <path d="M24 7v9m8-9v9m8-9v9M24 48v9m8-9v9m8-9v9M7 24h9M7 32h9M7 40h9m32-16h9m-9 8h9m-9 8h9"/>
+  </g>
+ </symbol>
+ <symbol id="approval" viewBox="0 0 64 64">
+  <g fill="none" stroke="#8963B7" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round">
+   <rect x="5" y="8" width="54" height="43" rx="5"/>
+   <circle cx="25" cy="23" r="6"/>
+   <path d="M14 40c1-7 5-10 11-10s10 3 11 10M24 57h16"/>
+   <circle cx="45" cy="41" r="11" fill="#F2ECFB"/>
+   <path d="m40 41 4 4 7-8"/>
+  </g>
+ </symbol>
+ <symbol id="laptop" viewBox="0 0 32 32">
+  <g fill="none" stroke="#527DB5" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><rect x="6" y="5" width="20" height="16" rx="2"/><path d="M3 25h26l-3-4H6z"/></g>
+ </symbol>
+</defs>
+<style>
+ text { font-family: "DejaVu Sans", "Noto Sans", "Liberation Sans", Arial, sans-serif; }
+</style>
+<rect x="0" y="0" width="1400" height="1400" rx="0" fill="url(#bg)" stroke="none" stroke-width="1"/>
+<rect x="260" y="35" width="880" height="181" rx="25" fill="#FFFFFF" stroke="#CFDEEF" stroke-width="2"/>
+<rect x="292" y="80" width="86" height="86" rx="20" fill="#EAF2FC" stroke="none" stroke-width="1"/>
+<use xlink:href="#server" x="303" y="90" width="64" height="64"/>
+<text x="405" y="80" font-size="15" fill="#5178AB" font-weight="700" letter-spacing="1.3" text-anchor="start">WEBSITE SERVER</text>
+<use xlink:href="#gh" x="404" y="105" width="28" height="28" fill="#252D39"/>
+<text x="443" y="128" font-size="22" fill="#23334C" font-weight="700" letter-spacing="0" text-anchor="start">GitHub</text>
+<use xlink:href="#ms" x="573" y="105" width="27" height="27"/>
+<text x="611" y="128" font-size="22" fill="#23334C" font-weight="700" letter-spacing="0" text-anchor="start">Microsoft</text>
+<use xlink:href="#gg" x="811" y="105" width="29" height="29"/>
+<text x="851" y="128" font-size="22" fill="#23334C" font-weight="700" letter-spacing="0" text-anchor="start">Google</text>
+<text x="1004" y="128" font-size="18" fill="#62738C" font-weight="400" letter-spacing="0" text-anchor="start">and others</text>
+<text x="405" y="174" font-size="18" fill="#586B85" font-weight="400" letter-spacing="0" text-anchor="start">Requests a passkey creation or sign-in</text>
+<rect x="80" y="321" width="1240" height="1045" rx="32" fill="#EDF4FD" stroke="#C8D9EF" stroke-width="2"/>
+<rect x="113" y="341" width="219" height="40" rx="20" fill="#DEEBFB" stroke="none" stroke-width="1"/>
+<use xlink:href="#laptop" x="126" y="350" width="25" height="25"/>
+<text x="165" y="368" font-size="16" fill="#4575AD" font-weight="700" letter-spacing="0.55" text-anchor="start">LINUX COMPUTER</text>
+<path d="M691 220V389" stroke="#407CC1" stroke-width="3.8" fill="none" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+<path d="M716 391V220" stroke="#407CC1" stroke-width="3.8" fill="none" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+<rect x="783" y="261" width="331" height="62" rx="15" fill="#FFFFFF" stroke="#D2E0F0" stroke-width="1.5"/>
+<text x="801" y="285" font-size="18" fill="#2D63A1" font-weight="700" letter-spacing="0" text-anchor="start">WebAuthn over HTTPS</text>
+<text x="801" y="307" font-size="15" fill="#647891" font-weight="400" letter-spacing="0" text-anchor="start">Challenge and response</text>
+<rect x="260" y="394" width="880" height="178" rx="25" fill="#FFFFFF" stroke="#CFDEEF" stroke-width="2"/>
+<rect x="292" y="437" width="86" height="86" rx="20" fill="#FFF0E7" stroke="none" stroke-width="1"/>
+<circle cx="335" cy="480" r="27" fill="#6552B9" opacity="0.18"/>
+<use xlink:href="#ff" x="312" y="453" width="51" height="51" fill="#F56B33"/>
+<text x="405" y="437" font-size="15" fill="#5579A7" font-weight="700" letter-spacing="1.3" text-anchor="start">WEB BROWSER</text>
+<text x="405" y="487" font-size="33" fill="#1B3052" font-weight="700" letter-spacing="0" text-anchor="start">Firefox</text>
+<text x="405" y="520" font-size="17" fill="#536985" font-weight="400" letter-spacing="0" text-anchor="start">Checks the website and asks for your passkey PIN when needed</text>
+<text x="405" y="549" font-size="16" fill="#72859C" font-weight="400" letter-spacing="0" text-anchor="start">Built-in WebAuthn and security-key support</text>
+<path d="M691 576V678" stroke="#407CC1" stroke-width="3.8" fill="none" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+<path d="M716 679V576" stroke="#407CC1" stroke-width="3.8" fill="none" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+<rect x="783" y="596" width="291" height="59" rx="15" fill="#FFFFFF" stroke="#D2E0F0" stroke-width="1.5"/>
+<text x="801" y="621" font-size="18" fill="#2D63A1" font-weight="700" letter-spacing="0" text-anchor="start">FIDO2 / CTAP</text>
+<text x="801" y="642" font-size="14" fill="#647891" font-weight="400" letter-spacing="0" text-anchor="start">Browser security-key messages</text>
+<rect x="260" y="682" width="880" height="127" rx="25" fill="#E5F0FF" stroke="#B6D2F2" stroke-width="2"/>
+<rect x="292" y="702" width="86" height="86" rx="20" fill="#D7E8FC" stroke="none" stroke-width="1"/>
+<use xlink:href="#usbplug" x="303" y="713" width="64" height="64"/>
+<text x="405" y="713" font-size="15" fill="#547DB0" font-weight="700" letter-spacing="1.2" text-anchor="start">VIRTUAL HID DEVICE</text>
+<text x="405" y="757" font-size="27" fill="#1B3D69" font-weight="700" letter-spacing="0" text-anchor="start">Virtual USB-style security key</text>
+<text x="405" y="789" font-size="16" fill="#466988" font-weight="400" letter-spacing="0" text-anchor="start">Linux UHID makes Fidophir appear as a security key to Firefox</text>
+<path d="M691 813V892" stroke="#407CC1" stroke-width="3.8" fill="none" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+<path d="M716 894V813" stroke="#407CC1" stroke-width="3.8" fill="none" stroke-linecap="round" marker-end="url(#arrowBlue)"/>
+<rect x="783" y="832" width="261" height="46" rx="14" fill="#FFFFFF" stroke="#D2E0F0" stroke-width="1.5"/>
+<text x="801" y="862" font-size="17" fill="#2D63A1" font-weight="700" letter-spacing="0" text-anchor="start">Local HID reports</text>
+<rect x="260" y="899" width="880" height="183" rx="26" fill="url(#fid)" stroke="#3159A4" stroke-width="1.6"/>
+<rect x="292" y="943" width="86" height="86" rx="20" fill="#4772C1" stroke="none" stroke-width="1"/>
+<use xlink:href="#shieldkey" x="303" y="953" width="64" height="64"/>
+<text x="405" y="931" font-size="15" fill="#C5D8FA" font-weight="700" letter-spacing="1.2" text-anchor="start">LOCAL SECURITY SERVICE</text>
+<text x="405" y="982" font-size="36" fill="#FFFFFF" font-weight="700" letter-spacing="0" text-anchor="start">Fidophir</text>
+<text x="405" y="1017" font-size="19" fill="#E6EEFF" font-weight="400" letter-spacing="0" text-anchor="start">OpenSK processes FIDO2 requests on this computer</text>
+<text x="405" y="1051" font-size="17" fill="#D5E3FC" font-weight="400" letter-spacing="0" text-anchor="start">Uses protected TPM keys and requests desktop approval</text>
+<path d="M523 1086C523 1137 402 1124 402 1179" stroke="#128A8A" stroke-width="4" fill="none" stroke-linecap="round" marker-start="url(#arrowTeal)" marker-end="url(#arrowTeal)"/>
+<path d="M879 1086C879 1137 1001 1124 1001 1179" stroke="#8963B7" stroke-width="4" fill="none" stroke-linecap="round" marker-start="url(#arrowPurple)" marker-end="url(#arrowPurple)"/>
+<rect x="110" y="1183" width="563" height="154" rx="23" fill="#FFFFFF" stroke="#BFD9DC" stroke-width="2"/>
+<rect x="111" y="1183" width="561" height="6" rx="3" fill="#128A8A" stroke="none" stroke-width="1"/>
+<rect x="140" y="1216" width="86" height="86" rx="20" fill="#E5F6F4" stroke="none" stroke-width="1"/>
+<use xlink:href="#chip" x="151" y="1227" width="64" height="64"/>
+<text x="247" y="1216" font-size="15" fill="#198083" font-weight="700" letter-spacing="1.05" text-anchor="start">TPM SECURITY CHIP</text>
+<text x="247" y="1258" font-size="25" fill="#1E5155" font-weight="700" letter-spacing="0" text-anchor="start">Hardware-protected keys</text>
+<text x="247" y="1288" font-size="16" fill="#416D70" font-weight="400" letter-spacing="0" text-anchor="start">Checks PIN authorization and signs challenges</text>
+<text x="247" y="1314" font-size="15" fill="#507D7D" font-weight="400" letter-spacing="0" text-anchor="start">Private keys are not exported in plain form</text>
+<rect x="727" y="1183" width="563" height="154" rx="23" fill="#FFFFFF" stroke="#DCCCEB" stroke-width="2"/>
+<rect x="728" y="1183" width="561" height="6" rx="3" fill="#8963B7" stroke="none" stroke-width="1"/>
+<rect x="756" y="1216" width="86" height="86" rx="20" fill="#F2EBFC" stroke="none" stroke-width="1"/>
+<use xlink:href="#approval" x="767" y="1227" width="64" height="64"/>
+<text x="863" y="1216" font-size="15" fill="#8864AF" font-weight="700" letter-spacing="1.05" text-anchor="start">LOGIN1 / POLKIT / GNOME</text>
+<text x="863" y="1258" font-size="25" fill="#513D69" font-weight="700" letter-spacing="0" text-anchor="start">Desktop approval</text>
+<text x="863" y="1288" font-size="16" fill="#6C5A80" font-weight="400" letter-spacing="0" text-anchor="start">Checks the active and unlocked user session</text>
+<text x="863" y="1314" font-size="15" fill="#7A668D" font-weight="400" letter-spacing="0" text-anchor="start">Asks you to approve or deny each operation</text>
+</svg>
