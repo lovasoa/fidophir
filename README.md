@@ -2,7 +2,7 @@
 
 [![Packages CI](https://github.com/lovasoa/fidophir/actions/workflows/packages.yml/badge.svg?branch=main)](https://github.com/lovasoa/fidophir/actions/workflows/packages.yml)
 
-Fidophir turns a Linux computer's TPM (a security chip) into a passkey authenticator for one desktop user. A passkey lets you sign in to a website without sending it a password. The TPM protects the private keys; wrapped key material and account information are stored on the computer. Firefox asks for a Fidophir PIN, and the desktop asks for approval when needed.
+Fidophir turns a Linux computer's TPM (a security chip found in most modern computers) into a passkey authenticator. A passkey lets you sign in to a website without sending it a password. The TPM protects the private keys; wrapped key material and account information are stored on the computer. Firefox asks for a Fidophir PIN, and the desktop asks for approval when needed.
 
 **Experimental:** Fidophir has been tested with a simulated TPM, but not yet with a physical TPM, GNOME, Firefox, Google or GitHub. It has not had an independent security audit or FIDO certification. Do not rely on it as your only way into an account. See [validation](VALIDATION.md).
 
