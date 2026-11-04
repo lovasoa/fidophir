@@ -88,25 +88,11 @@ Keep another sign-in or recovery method for each account. Fidophir passkeys stay
 
 Resetting deletes **all your Fidophir passkeys** on this computer. You will need another sign-in or recovery method for each website, then add new passkeys. Other users' Fidophir passkeys are unaffected.
 
-1. Open a terminal in your own desktop account and check where your state is stored:
-
-   ```sh
-   systemctl show "fidophir@$(id -u).service" --property=StateDirectory --value
-   ```
-
-2. If the output is `fidophir-users/` followed by your user ID, stop the service and delete your state:
+1. Open a terminal in your own desktop account, stop the service and delete your state:
 
    ```sh
    sudo systemctl stop "fidophir@$(id -u).service" && sudo rm -rf -- "/var/lib/fidophir-users/$(id -u)/v1"
    ```
-
-   If the output is `fidophir`, you have a legacy installation. Use this command instead:
-
-   ```sh
-   sudo systemctl stop "fidophir@$(id -u).service" && sudo rm -rf -- /var/lib/fidophir/v1
-   ```
-
-   If the output is different, do not delete anything: your service has a custom state location. Check its configuration first.
 
 3. Start the service again, then set a new PIN and add passkeys as described above:
 
