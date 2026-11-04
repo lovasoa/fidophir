@@ -13,6 +13,9 @@ is pending. Google/GitHub login is the target, not a verified compatibility clai
 See [validation](VALIDATION.md) and the [design](DESIGN.md).
 This is unaudited experimental security software, not a certified security key.
 
+
+![architecture](fidophir-architecture.svg)
+
 ```mermaid
 sequenceDiagram
     participant F as Firefox
