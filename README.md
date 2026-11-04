@@ -2,11 +2,11 @@
 
 [![Packages CI](https://github.com/lovasoa/fidophir/actions/workflows/packages.yml/badge.svg?branch=main)](https://github.com/lovasoa/fidophir/actions/workflows/packages.yml)
 
-Fidophir turns a Linux computer's TPM (a security chip found in most modern computers) into a passkey authenticator. A passkey lets you sign in to a website without sending it a password. The TPM protects the private keys; wrapped key material and account information are stored on the computer. Firefox asks for a Fidophir PIN, and the desktop asks for approval when needed.
+Fidophir exposes a Linux computer's TPM (a security chip found in most modern computers) as a virtual USB physical security key, allowing passkey authentication in web browsers. A passkey lets you sign in to a website without sending it a password. The TPM protects the private keys; wrapped key material and account information are stored on the computer. Firefox asks for a Fidophir PIN, and the desktop asks for approval when needed.
 
-**Experimental:** Fidophir has been tested with a simulated TPM, but not yet with a physical TPM, GNOME, Firefox, Google or GitHub. It has not had an independent security audit or FIDO certification. Do not rely on it as your only way into an account. See [validation](VALIDATION.md).
+**Experimental:** Fidophir was built for me, Ophir. I intend to use it and fix bugs and security issues as I find them, but offer no guarantee whatsoever. Do not rely on it as your only way into an account. See [validation](VALIDATION.md).
 
-The intended setup is Fedora 44 with GNOME and the Firefox RPM. Debian 13 packages are also built, but desktop compatibility remains to be tested. Fidophir supports up to 64 passkeys on one computer; they cannot be synced or moved to another TPM.
+Fidophir supports up to 64 passkeys on one computer; they cannot be synced or moved to another TPM.
 
 ## What does it protect against?
 
