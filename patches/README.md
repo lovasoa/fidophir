@@ -1,38 +1,11 @@
-# OpenSK integration diff
+# OpenSK patch
 
-Upstream: https://github.com/google/OpenSK at
-`8c81bc299886deb221beed35e2fe01a822649d67`, directory `libraries/opensk`.
-The pinned `vendor/OpenSK` submodule stays untouched. `make prepare` copies the
-standalone library and its unmodified CBOR sibling into ignored build outputs,
-then applies `opensk.patch` with Git. The engine-test lockfile lives separately
-in `locks/opensk.Cargo.lock`. Release archives contain the exact prepared sources.
+Fidophir pins [OpenSK](https://github.com/google/OpenSK) at `8c81bc299886deb221beed35e2fe01a822649d67`. `make prepare` copies its standalone library and CBOR sibling into `build/` and applies `opensk.patch`; it does not modify the submodule. Release source bundles include the prepared sources. `FILES` lists the complete patch scope.
 
-Only three upstream files change; `FILES` is the complete inventory:
+| Upstream file | Change |
+|---|---|
+| `src/env/mod.rs` | Adds hooks for PIN verification, grant cleanup, credential creation and signing, with software defaults for upstream tests. |
+| `src/ctap/client_pin.rs` | Calls the PIN hooks, clears grants with the token lifecycle and requests presence for initial PIN setup. |
+| `src/ctap/mod.rs` | Routes credential creation and signing through the hooks. |
 
-| File | Injection points |
-| --- | --- |
-| `src/env/mod.rs` | Default methods for PIN verification/revocation and credential creation/signing. Software defaults preserve the existing TestEnv. |
-| `src/ctap/client_pin.rs` | Delegate candidate verification after durable retry decrement; revoke platform grants with token reset/expiry/errors; require existing presence loop before first PIN setup. |
-| `src/ctap/mod.rs` | Three credential calls: generation, self-attestation, assertion. |
-
-Linux policy and RP prompt context use the **existing**
-`Env::process_vendor_command` pre-dispatch hook. The adapter calls OpenSK's
-`Command::deserialize`, sets request context, and normally returns `None` for core
-processing; nonresident creation returns the standard unsupported-option response.
-The core parses again normally. Both passes use upstream's parser; there is no
-custom wire-format logic or protocol dispatcher in the adapter.
-
-Existing `Persist::set_pin` provisions/changes TPM authorization. `pin_hash`
-returns an opaque all-zero configured-PIN marker, never a verifier. Only the
-candidate-verification hook checks PINs, in TPM. Existing `KeyStore` PIN methods
-pass a new candidate directly to `set_pin` or expose the currently verified cache
-for the forced-change equality check; no verifier file is written.
-
-The generic crypto API, presence API, storage logic, manifest, fingerprint paths,
-CTAP1, private-key helpers and TestEnv are unchanged. The host uses upstream's
-`CtapState` and `MainHid` directly, polling token expiry regardless of Wink state.
-Unexpected TPM/storage faults log and exit; systemd handles restart.
-
-Core tests: 346 with std/no defaults, 393 with upstream defaults/std. Independent
-simulator and private-D-Bus tests cover native overrides, including rejection of
-the public marker, forced-PIN-change behavior and denied initial setup.
+The Linux host uses the existing pre-dispatch hook to capture operation context and reject non-discoverable credentials. Both it and OpenSK use OpenSK's parser. Existing persistence interfaces configure the TPM PIN; the configured-PIN marker is not a verifier. See [design](../DESIGN.md) for the security boundaries and [validation](../VALIDATION.md) for test evidence.

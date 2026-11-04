@@ -1,125 +1,84 @@
-# Fidophir — experimental implementation
+# Fidophir
 
 [![Packages CI](https://github.com/lovasoa/fidophir/actions/workflows/packages.yml/badge.svg?branch=main)](https://github.com/lovasoa/fidophir/actions/workflows/packages.yml)
 
-[Download packages](https://github.com/lovasoa/fidophir/releases/latest)
+Fidophir turns a Linux computer's TPM (a security chip) into a passkey authenticator for one desktop user. A passkey lets you sign in to a website without sending it a password. The TPM protects the private keys; wrapped key material and account information are stored on the computer. Firefox asks for a Fidophir PIN, and the desktop asks for approval when needed.
 
-A single-owner Linux TPM authenticator for Firefox, with resident ES256 passkeys,
-the browser's ClientPIN UI, and fresh desktop approval through login1/polkit.
-No custom UI, SQLite, browser extension, network endpoint or runtime shell commands.
+**Experimental:** Fidophir has been tested with a simulated TPM, but not yet with a physical TPM, GNOME, Firefox, Google or GitHub. It has not had an independent security audit or FIDO certification. Do not rely on it as your only way into an account. See [validation](VALIDATION.md).
 
-**Implemented and simulator-tested; physical TPM/UHID, GNOME and Firefox acceptance
-is pending. Google/GitHub login is the target, not a verified compatibility claim.**
-See [validation](VALIDATION.md) and the [design](DESIGN.md).
-This is unaudited experimental security software, not a certified security key.
+The intended setup is Fedora 44 with GNOME and the Firefox RPM. Debian 13 packages are also built, but desktop compatibility remains to be tested. Fidophir supports up to 64 passkeys on one computer; they cannot be synced or moved to another TPM.
 
+## What does it protect against?
 
-![architecture](fidophir-architecture.svg)
+The table compares typical setups. It assumes a unique password, a password manager such as 1Password, a FIDO2 YubiKey and the intended Fidophir setup. A website’s account recovery process can bypass any of these protections.
 
-```mermaid
-sequenceDiagram
-    participant F as Firefox
-    participant M as Fidophir / OpenSK
-    participant T as TPM2-TSS → TPM
-    participant G as login1 / polkit / GNOME
-    F->>M: ClientPIN v2 encrypted PIN proof
-    M->>M: Durably consume a retry
-    M->>T: Load sealed child using PIN-authorized parent
-    T-->>M: Authorized master, or DA-protected refusal
-    M-->>F: Scoped, expiring PIN/UV token
-    F->>M: MakeCredential / GetAssertion + token MAC
-    M->>G: Fresh approval for operation and RP
-    G-->>M: Approve / deny / cancel
-    M->>T: Create key or load credential and sign
-    T-->>M: Wrapped key blob or signature
-    M-->>F: Standard CTAP response over virtual HID
+| Threat | Password | Passkey in a password manager | Passkey on a YubiKey | Fidophir |
+|---|---|---|---|---|
+| Fake website tries to steal a login (phishing) | Vulnerable if entered | Resists fake-domain phishing | Resists fake-domain phishing | Designed to resist fake-domain phishing |
+| Attacker intercepts network traffic | HTTPS normally protects the password | The passkey secret is not sent | The passkey secret is not sent | The passkey secret is not sent |
+| Website's login database is stolen | Stored passwords may be cracked | No secret usable to sign in is stored by the website | Same | Same |
+| Malware running as your user | Can steal a typed or stored password | May access an unlocked vault or trick you into approving | Cannot normally export the key; may trick you into approving a login | TPM key cannot normally be exported; malware may use the device or trick you into approving |
+| Attacker controls the computer, browser or desktop | Vulnerable | Vulnerable when used on that computer | Key stays on the YubiKey, but attacker may misuse an approved operation | **Not protected:** Fidophir trusts these components |
+| Someone has the physical device | Can read or use passwords if they can unlock the computer or vault | Depends on device and vault security | Needs the key and may need its PIN; touch is required for normal login | Normal sign-in needs the PIN and desktop approval; physical attacks are untested |
+| Stored or synced credentials are copied | Copied passwords can be used | Depends on vault encryption and access | Private keys cannot normally be copied | Wrapped keys work only with the same TPM and PIN; copied old state can still be used there |
+| Device is lost or damaged | Password can be used elsewhere if remembered or backed up | Synced or backed-up vault may restore access | A separate registered key or recovery method is needed | The TPM and local state are both needed; use a separate recovery method |
+
+Passkey protection assumes the browser and website implement the protocol correctly. The YubiKey column describes common FIDO2 use, not every model or configuration. Fidophir's protections are design goals supported by simulator tests, not physical-device security claims. Malware can also steal an authenticated browser session after any of these sign-in methods.
+
+Fidophir is useful if you want a hardware-backed passkey on the computer you already use, without a separate security key. A physical security key has a separate device and touch control; Fidophir does not provide the same isolation from a compromised computer.
+
+## Important limits
+
+- Your TPM and Fidophir's local state are both needed. Keep another sign-in or recovery method for every account.
+- Changing the Fidophir PIN or deleting a local passkey does **not** revoke a copied older state file on the same TPM. To revoke access, remove the passkey from the website.
+- Fidophir trusts the computer's administrator, kernel, browser and desktop approval system. It does not protect against privileged malware or guarantee protection against physical attacks.
+- Too many wrong PIN attempts can permanently block the Fidophir PIN, requiring local state removal and re-enrollment. Attempts can also contribute to the TPM's shared lockout, affecting other software. Fidophir cannot clear TPM lockout.
+- The desktop approval request describes the operation and website, but its text is supplied by the client and is not proof of the browser's origin. Fingerprint availability depends on your desktop configuration.
+
+See [design](DESIGN.md) for the security boundaries and implementation.
+
+## Install for testing
+
+[Download a package](https://github.com/lovasoa/fidophir/releases/latest). Installation requires administrator access. The package does not start the service or enroll a passkey. Install the downloaded package using the appropriate command, replacing the filename with yours:
+
+```sh
+sudo dnf install ./fidophir-PACKAGE.x86_64.rpm  # Fedora 44
+# or: sudo apt install ./fidophir-PACKAGE_amd64.deb  # Debian 13
 ```
 
-## What we own
+For first-time setup, configure the owner. Existing users should keep their configuration. Replace `YOUR_DESKTOP_USER` with your login name. Find its numeric ID with `id -u YOUR_DESKTOP_USER`, and your current seat with `loginctl show-session "$XDG_SESSION_ID" -p Seat --value`. Enter those values as `FIDOPHIR_OWNER_UID` and `FIDOPHIR_OWNER_SEAT` in the editor; verify them before starting the service.
 
-| File | Responsibility |
-|---|---|
-| `src/main.rs`, `src/env.rs` | Serialized core loop, fixed profile, environment adapters |
-| `src/backend.rs` | One typed blocking worker, fatal fault handling, PIN authorization lifetime |
-| `src/tpm.rs` | Object templates, scoped ESAPI objects/sessions, create/load/change-auth/sign |
-| `src/state.rs` | Bounded per-record files, exclusive directory lock, durable replacement/unlink |
-| `src/io.rs` | UHID events; upstream HID framing, keepalives and busy replies |
-| `src/approval.rs` | Native GIO login1/polkit calls and operation-scoped cancellation |
-| `patches/opensk.patch` | Complete diff against pinned upstream OpenSK |
-| `packaging/` | Unit, policy, device permissions, service accounts, local RPM recipe |
+```sh
+sudo install -d -m 0755 /etc/fidophir
+sudo test -e /etc/fidophir/owner.conf || sudo install -m 0600 /usr/share/doc/fidophir/owner.conf.example /etc/fidophir/owner.conf
+sudoedit /etc/fidophir/owner.conf
+sudo usermod -aG fidophir-client YOUR_DESKTOP_USER
+sudo modprobe uhid
+sudo udevadm control --reload
+sudo udevadm trigger --subsystem-match=misc --sysname-match=uhid
+```
 
-OpenSK is pinned to `8c81bc299886deb221beed35e2fe01a822649d67`; the repository references it through the `vendor/OpenSK` Git submodule.
-The build uses only its standalone library and CBOR crate. `make prepare` applies
-our patch into ignored `build/` outputs; the upstream checkout stays unchanged.
-Only three upstream files change: Env, ClientPIN, and three credential calls in
-the dispatcher. PIN setup/change reuse Persist and KeyStore; presence context
-and resident-only policy use the existing platform pre-dispatch hook.
-See [patch notes](patches/README.md). Upstream owns CTAP parsing, PIN crypto,
-permissions, token timers, credential management, CBOR and HID fragmentation.
+Add the desktop user only to `fidophir-client`, not to `fidophir` or `tss`.
 
-The Rust graph is locked in `Cargo.lock`. GIO/GLib and TPM2-TSS are dynamically linked
-Fedora libraries; `tss-esapi`, `gio`, `glib`, `uhid-virt`, `nix` and RustCrypto provide
-bindings/helpers. The source bundle includes third-party Rust sources, hashes,
-licenses and `DEPENDENCIES.tsv`. They are pinned crates.io sources, not a claim that
-all Rust dependencies are Fedora-packaged. Native updates come through Fedora;
-Rust dependency updates require rebuilding this program.
+Log out and back in so the group change takes effect, then run:
 
-## Security contract and limits
+```sh
+sudo systemctl start fidophir.service
+```
 
-* Credential private scalars are generated in the TPM and never exported in clear.
-  Each credential file holds a fixedTPM/fixedParent public/private blob. TPM object
-  slots are transient working space, not a per-credential storage limit.
-* A deterministic owner primary **R** wraps a PIN-authorized storage parent **P**.
-  A sealed child **S** verifies authorization when loaded under P and supplies a
-  64-byte extension master. Credential signing keys **K** are children of P.
-  Only P participates in TPM dictionary-attack protection. Wrong PINs reach the
-  TPM; no software PIN verifier is written. The owner hierarchy must have empty
-  authorization; startup fails if this machine policy is incompatible.
-* HMAC sessions are salted to R. Parameter encryption protects secret inputs and
-  the unsealed output where the TPM command supports it. Objects and sessions
-  use the library's scoped cleanup. K is loaded for each signature and flushed.
-* The daemon holds the PIN hash prefix and extension master only for OpenSK's
-  successful authorization lifetime. Secret wrappers zeroize those Rust buffers.
-  Expiry, PIN errors/change, cancellation paths that reset the token and process
-  restart revoke the cached grant. This does not promise erasure of every copy
-  inside native libraries, the kernel or a compromised machine.
-* Every requested CTAP user-presence check requires a fresh `auth_self` challenge.
-  Silent grants, retained/temporary authorizations, ambiguous/nonlocal/inactive/
-  locked sessions and stale callbacks are rejected. GNOME's agent/PAM owns the UI
-  and any fingerprint support; Fidophir never calls GNOME Keyring or fprintd.
-  Desktop approval is separate from the TPM PIN. Protocol operations with `up=false`
-  do not gain a fabricated physical touch; normal CTAP semantics remain upstream.
-* State is mode 0700, files 0600, bounded and checked for ownership, links and type.
-  GLib supplies durable atomic file replacement; deletion fsyncs the directory.
-  Each record is atomic; a complete CTAP operation is not a multi-file transaction.
-  Uncertain durable writes stop the process. There is no application record cache.
-* PIN change rewrites P's private blob with `ObjectChangeAuth`, preserving children.
-  **An old copy of P remains usable with its old PIN on the same TPM.** Neither
-  PIN changes nor deleting a local credential revoke copied state. Revoke the
-  website registration when revocation is needed. State has no rollback protection.
-* TPM DA state is shared with other machine uses. Permitted hostile callers can
-  cause denial of service. The program never clears the TPM, changes global DA
-  configuration, takes persistent handles, or repairs hardware lockout.
-* This trusts the kernel, root, service account, browser, desktop agent and host
-  polkit/PAM policy. RP prompt text is client-supplied context, not proof of browser
-  origin. Desktop lock checks are not atomic with signing. No PCR policy, antirollback
-  NV counter, secure-enclave isolation or resistance to privileged live malware is claimed.
+Complete the [physical acceptance checklist](VALIDATION.md#physical-acceptance-not-yet-run) before relying on Fidophir; use disposable accounts during testing. Open `about:webauthn` in Firefox to set the Fidophir PIN, then use a website's passkey setup. This PIN is separate from your desktop login password; the desktop approval may also ask for your login password or fingerprint. If startup fails, inspect `journalctl -u fidophir.service`. Only enable automatic startup (`sudo systemctl enable fidophir.service`) after acceptance.
 
-The fixed profile is discoverable ES256 only, 64 credentials, PIN minimum 8 code
-points, ClientPIN v2 only, always-UV, default UV-required credential protection,
-counter zero, zero AAGUID and self-attestation. No CTAP1, factory reset, fingerprint
-enrollment, config/vendor/debug interface, remote TCTI or software signing fallback
-ships in the default executable.
+Stopping or removing the service preserves `/var/lib/fidophir`. There is no automatic reset or migration tool. If you lose the PIN, an administrator must stop the service and remove its local state before starting over; this removes all local Fidophir passkeys. Use each website's recovery method to enroll new passkeys. Debian package and build details are in [packaging](packaging/README.md).
 
-## Build and test on Fedora 44
+## Build and test
 
-Build prerequisites (administrator commands, not executed by the build):
+On Fedora 44, install the build tools:
 
 ```sh
 sudo dnf install rust cargo gcc make clang-libs clang-devel pkgconf-pkg-config glib2-devel tpm2-tss-devel
 ```
 
-From an extracted source bundle, with Rust/Cargo >= 1.92:
+Rust and Cargo 1.92 or newer are required. From an extracted release source bundle:
 
 ```sh
 sha256sum --check SHA256SUMS
@@ -127,139 +86,15 @@ make build
 make test
 ```
 
-Builds are `--frozen` (locked and offline). For a Git checkout, initialize the one upstream submodule and prepare the patched
-build sources before fetching dependencies (nested OpenSK submodules are unused):
+Builds are locked and offline. For a Git checkout, fetch the pinned submodule and dependencies first:
 
 ```sh
 git submodule update --init
 make prepare
 cargo fetch --locked
 cargo fetch --locked --manifest-path build/opensk/Cargo.toml
+make build
+make test
 ```
 
-Offline release bundles include the prepared library snapshot and need no submodule
-checkout. `locks/opensk.Cargo.lock` pins the engine test dependencies. To make an offline source release from populated Cargo caches:
-
-```sh
-python3 tools/source_bundle.py --output dist
-```
-
-Optional integration prerequisites: `swtpm tpm2-tools python3-fido2 python3-gobject
-dbus-daemon`. `make integration` uses disposable loopback TPM simulators and a
-private D-Bus, with synthetic credentials only. It never connects to the host TPM,
-GNOME agent, real system bus or website. It changes DA parameters on its disposable
-simulator to exercise the separate persistent eight-attempt limit. Test transports
-and fake approvals require the `integration-tests` feature and are excluded from
-the default package. Do not deploy a binary built with that feature.
-
-## Installation and first physical acceptance
-
-Use the RPM or Debian 13 recipes in [packaging](packaging/README.md). The package does not
-start the service, configure an owner, or enroll a website credential. `make install
-DESTDIR=/absolute/staging/path` only stages files and has no activation hooks.
-
-After reviewing and installing the package:
-
-```sh
-sudo dnf install ./dist/fidophir-0.1.0-1.fc44.x86_64.rpm
-sudo install -d -m 0755 /etc/fidophir
-sudo install -m 0600 /usr/share/doc/fidophir/owner.conf.example /etc/fidophir/owner.conf
-sudoedit /etc/fidophir/owner.conf                 # Set the actual desktop UID and seat.
-sudo usermod -aG fidophir-client YOUR_DESKTOP_USER
-sudo modprobe uhid
-sudo udevadm control --reload
-sudo udevadm trigger --subsystem-match=misc --sysname-match=uhid
-# Log out and back in to acquire the client group, then:
-sudo systemctl start fidophir.service
-```
-
-The system service runs as `fidophir`, with its private primary group and only the
-unit's supplementary `tss` group, empty capability sets, AF_UNIX only, closed device
-policy allowing `/dev/tpmrm0` and `/dev/uhid`, read-only system files and a writable
-state directory. The client gets only the generated hidraw node through
-`fidophir-client`. Do not add the desktop user to `fidophir` or `tss`.
-
-Before enrollment, perform the physical checklist in `VALIDATION.md`, particularly
-the actual hidraw rule/ACL match and native fresh-approval behavior. The service
-refuses root execution, missing/invalid owner configuration and incompatible state.
-Failure is visible in `journalctl -u fidophir.service`; it does not print PINs or
-credential contents. SELinux enforcing-mode behavior still needs physical testing.
-
-Firefox `about:webauthn` is the intended PIN-management UI. Then test Google's and
-GitHub's normal passkey enrollment and login with disposable accounts. No browser
-provider or extension is installed. Keep existing account recovery methods while
-validating this implementation. Enable boot startup explicitly only after acceptance:
-
-```sh
-sudo systemctl enable fidophir.service
-```
-
-Stopping/removing the service preserves `/var/lib/fidophir`. There is no automatic
-reset or migration tool; unknown state layouts fail closed.
-
-## Continuous packages
-
-Every push to `main` runs formatting, Clippy, core/host tests and independent FIDO/
-private-desktop tests, builds Fedora 44 x86_64 RPMs and a Debian 13 amd64 DEB, then
-publishes a GitHub Release for that commit. Pull requests build/test without release
-permissions. Builds are not canceled by newer commits. No additional repository
-secret is required: only the final publishing job receives `contents: write`.
-
-Versions are `0.1.0+git<RUN_NUMBER>.<12-character-commit>`. Releases use the full
-commit in their tag, include the offline source bundle, source RPM and SHA256SUMS,
-and publish the tested build artifacts without rebuilding. A completed older build
-cannot overwrite the current main commit's Latest marker. Re-running a workflow
-updates that commit's release rather than creating duplicates.
-
-Packages are GitHub Release downloads, with no hosted APT/YUM repository or signing
-key to maintain. For the latest successful main build:
-
-```sh
-gh release download --repo lovasoa/fidophir --pattern '*.deb'       # Debian 13
-# or:
-gh release download --repo lovasoa/fidophir --pattern '*x86_64.rpm' # Fedora 44
-```
-
-The Debian build uses the pinned official Rust 1.98.1/Trixie image and native Debian
-libraries. Rust is external to dpkg, so CI skips dpkg's Build-Depends resolution
-check after explicitly installing the native dependencies. The package build itself
-and its tests remain offline. The first complete CI run is the reference packaging
-validation; physical TPM/GNOME/Firefox acceptance remains separate.
-
-## Automatic dependency maintenance
-
-Dependabot checks action pins, pinned build images and the OpenSK submodule daily.
-The Dockerfiles in `packaging/images/{fedora,rust}/` are the canonical CI image references. Fedora
-remains on the supported 44 release; Rust image updates retain the Debian Trixie
-variant. Native library packages are refreshed by dnf/apt on every package build.
-
-A daily Actions job installs the current cargo-edit with its published lockfile
-and uses standard `cargo upgrade`/`cargo update`, preparing OpenSK
-first and updating both application and engine-test lockfiles. Compatible and
-breaking Rust updates use separate managed branches, so an incompatible API update
-cannot hold up compatible fixes. Manifest ranges permit updates; committed lockfiles
-and frozen/offline builds continue to pin the exact sources and checksums.
-
-Candidates run the full existing test/DEB/RPM workflow with read-only repository
-permissions. A separate gate executes only main's code, accepts only owned bot
-branches or actual Dependabot PRs, checks the current head and both successful
-package jobs, and restricts changed paths to dependency metadata. Stale candidates
-are refreshed and retested. Cargo branches fast-forward main without forcing;
-Dependabot PRs merge with an expected-head guard. Conflicts and failing checks stay
-unmerged. Runtime source/TPM policy changes are never approved by this gate.
-
-After accepting an update, the gate explicitly dispatches the package workflow for
-that exact main-history commit. This is necessary because GitHub suppresses push
-workflows for changes made with GITHUB_TOKEN. Publication reruns all tests and both
-package builds, checks main ancestry, and publishes only on success, even if main
-has advanced in the meantime.
-
-There are no new PATs, third-party installed apps, or repository-wide workflow PR
-approval permissions. The current private plan has no required-check branch
-protection; the explicit gate supplies the dependency-specific checks. The merger's
-failure/staleness/file-scope cases are tested with Node's built-in test runner.
-
-Use the Actions **Update Cargo dependencies** workflow to check immediately;
-**Merge tested dependency updates** shows acceptance/refresh runs. Dependency
-branches named `automation/cargo-*` are managed by the bot; human changes there are
-preserved and cause the updater to stop rather than overwrite them.
+`make integration` additionally needs `swtpm`, `tpm2-tools`, `python3-fido2`, `python3-gobject` and `dbus-daemon`. It uses disposable simulators and a private D-Bus, not the host TPM or real accounts. Its test-only binary is not for deployment. See [validation](VALIDATION.md) for what the tests cover and what remains untested.
