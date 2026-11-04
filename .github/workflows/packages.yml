@@ -79,12 +79,13 @@ jobs:
           make test
           cargo test --frozen --manifest-path build/opensk/Cargo.toml --features std --lib
           make integration
-      - name: Build offline source bundle and RPM
+      - name: Build RPM from tracked sources
         shell: bash
         run: |
-          python3 tools/source_bundle.py --version "$PACKAGE_VERSION" --output dist
-          mkdir -p rpmbuild/SOURCES
-          cp "dist/fidophir-${PACKAGE_VERSION}.tar.gz" rpmbuild/SOURCES/
+          mkdir -p rpmbuild/SOURCES dist
+          git ls-files --recurse-submodules -z | tar --null --files-from=- \
+            --transform "s,^,fidophir-${PACKAGE_VERSION}/," \
+            -czf "rpmbuild/SOURCES/fidophir-${PACKAGE_VERSION}.tar.gz"
           rpmbuild -ba --define "_topdir $PWD/rpmbuild" --define "fidophir_version $PACKAGE_VERSION" packaging/fidophir.spec
           cp rpmbuild/RPMS/x86_64/*.rpm rpmbuild/SRPMS/*.rpm dist/
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -93,7 +94,6 @@ jobs:
           if-no-files-found: error
           path: |
             dist/*.rpm
-            dist/*.tar.gz
 
   deb:
     name: Build Debian 13 DEB
@@ -109,24 +109,22 @@ jobs:
       - name: Install Debian native build dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends debhelper dpkg-dev devscripts libglib2.0-dev libtss2-dev libclang-dev python3
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+          apt-get install -y --no-install-recommends debhelper dpkg-dev devscripts git libglib2.0-dev libtss2-dev libclang-dev python3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          name: packages-rpm
-          path: incoming
-      - name: Build from the same offline source bundle
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          submodules: true
+      - name: Build DEB from the same commit
         shell: bash
         run: |
-          tar -xzf "incoming/fidophir-${PACKAGE_VERSION}.tar.gz"
-          cd "fidophir-${PACKAGE_VERSION}"
-          sha256sum --check SHA256SUMS > /dev/null
           dch --newversion "$PACKAGE_VERSION" --distribution unstable "Build commit $SOURCE_SHA."
           rustc --version
           cargo --version
           # Rust/Cargo are supplied by the pinned official image, not dpkg.
           dpkg-buildpackage --build=binary --no-sign -d
-          mkdir -p ../dist
-          cp ../fidophir_*.deb ../dist/
+          mkdir -p dist
+          cp ../fidophir_*.deb dist/
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: packages-deb
@@ -158,11 +156,10 @@ jobs:
           rpm=(packages/*x86_64.rpm)
           deb=(packages/*.deb)
           source_rpm=(packages/*.src.rpm)
-          source_bundle=(packages/*.tar.gz)
-          [[ ${#rpm[@]} == 1 && ${#deb[@]} == 1 && ${#source_rpm[@]} == 1 && ${#source_bundle[@]} == 1 ]] || { echo 'Expected exactly one of each package'; exit 1; }
+          [[ ${#rpm[@]} == 1 && ${#deb[@]} == 1 && ${#source_rpm[@]} == 1 ]] || { echo 'Expected exactly one of each package'; exit 1; }
           mv -- "${rpm[0]}" packages/fidophir.rpm
           mv -- "${deb[0]}" packages/fidophir.deb
-          (cd packages && sha256sum -- ./*.deb ./*.rpm ./*.tar.gz > SHA256SUMS)
+          (cd packages && sha256sum -- ./*.deb ./*.rpm > SHA256SUMS)
           status=$(gh api "repos/${GH_REPO}/compare/${SOURCE_SHA}...main" --jq .status)
           [[ "$status" == ahead || "$status" == identical ]] || { echo 'Source is outside main history'; exit 1; }
           tag="build-${SOURCE_SHA}"
@@ -175,7 +172,7 @@ jobs:
           gh release upload "$tag" \
             "packages/fidophir.rpm#Fidophir $PACKAGE_VERSION (Fedora 44 RPM)" \
             "packages/fidophir.deb#Fidophir $PACKAGE_VERSION (Debian 13 DEB)" \
-            "${source_rpm[0]}" "${source_bundle[0]}" packages/SHA256SUMS --clobber
+            "${source_rpm[0]}" packages/SHA256SUMS --clobber
           # A slower old build must not replace a newer main commit as Latest.
           if [ "$(gh api "repos/${GH_REPO}/commits/main" --jq .sha)" = "$SOURCE_SHA" ]; then
             gh release edit "$tag" --latest

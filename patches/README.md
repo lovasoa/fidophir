@@ -1,6 +1,6 @@
 # OpenSK patch
 
-Fidophir pins [OpenSK](https://github.com/google/OpenSK) at `8c81bc299886deb221beed35e2fe01a822649d67`. `make prepare` copies its standalone library and CBOR sibling into `build/` and applies `opensk.patch`; it does not modify the submodule. Release source bundles include the prepared sources. `FILES` lists the complete patch scope.
+Fidophir pins [OpenSK](https://github.com/google/OpenSK) at `8c81bc299886deb221beed35e2fe01a822649d67`. `make prepare` copies its standalone library and CBOR sibling into `build/` and applies `opensk.patch`; it does not modify the submodule. `FILES` lists the complete patch scope.
 
 | Upstream file | Change |
 |---|---|

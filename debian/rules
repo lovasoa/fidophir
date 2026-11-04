@@ -1,28 +1,23 @@
 #!/usr/bin/make -f
-export CARGO_HOME = $(CURDIR)/.cargo-home
-
 %:
 	dh $@ --buildsystem=makefile
 
 override_dh_auto_build:
 	$(MAKE) build
+	python3 tools/licenses.py
 
 override_dh_auto_test:
 	$(MAKE) test
 
 override_dh_auto_install:
 	$(MAKE) install DESTDIR=$(CURDIR)/debian/fidophir
-	install -Dm644 DEPENDENCIES.tsv debian/fidophir/usr/share/doc/fidophir/DEPENDENCIES.tsv
+	install -Dm644 build/licenses/DEPENDENCIES.tsv debian/fidophir/usr/share/doc/fidophir/DEPENDENCIES.tsv
 	mkdir -p debian/fidophir/usr/share/licenses/fidophir/third-party
-	cp -a licenses/. debian/fidophir/usr/share/licenses/fidophir/third-party/
+	cp -a build/licenses/. debian/fidophir/usr/share/licenses/fidophir/third-party/
 
 override_dh_installsystemd:
 	dh_installsysusers
 	dh_installsystemd fidophir.target
 
 override_dh_auto_clean:
-	rm -rf target .cargo-home
-
-# Cargo's checksum manifests include upstream *.orig files; keep them intact.
-override_dh_clean:
-	dh_clean -Xvendor/crates
+	rm -rf target build

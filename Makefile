@@ -10,15 +10,15 @@ prepare:
 	sh tools/prepare-opensk.sh
 
 build: prepare
-	$(CARGO) build --frozen --release --bin fidophir --target-dir $(TARGET_DIR)
+	$(CARGO) build --locked --release --bin fidophir --target-dir $(TARGET_DIR)
 
 test: prepare
 	python3 tests/packaging.py
-	$(CARGO) test --frozen --lib --target-dir $(TARGET_DIR)
-	$(CARGO) test --frozen --manifest-path build/opensk/Cargo.toml --no-default-features --features std --lib --target-dir $(TARGET_DIR)
+	$(CARGO) test --locked --lib --target-dir $(TARGET_DIR)
+	$(CARGO) test --locked --manifest-path build/opensk/Cargo.toml --no-default-features --features std --lib --target-dir $(TARGET_DIR)
 
 integration: prepare
-	$(CARGO) build --frozen --bin fidophir-integration --features integration-tests --target-dir $(TARGET_DIR)
+	$(CARGO) build --locked --bin fidophir-integration --features integration-tests --target-dir $(TARGET_DIR)
 	python3 tests/interop.py --binary $(abspath $(TARGET_DIR))/debug/fidophir-integration --expiry
 	python3 tests/desktop.py --binary $(abspath $(TARGET_DIR))/debug/fidophir-integration
 

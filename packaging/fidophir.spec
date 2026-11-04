@@ -1,4 +1,4 @@
-# Local Fedora 44 package using the locked, vendored source bundle.
+# Local Fedora 44 package built from source with locked Cargo dependencies.
 # This is not a claim of Fedora distribution package-policy approval.
 %global debug_package %{nil}
 %{!?fidophir_version:%global fidophir_version 0.1.1}
@@ -12,6 +12,8 @@ BuildRequires:  cargo >= 1.92
 BuildRequires:  rust >= 1.92
 BuildRequires:  gcc
 BuildRequires:  make
+BuildRequires:  git
+BuildRequires:  python3
 BuildRequires:  clang-libs
 BuildRequires:  clang-devel
 BuildRequires:  pkgconf-pkg-config
@@ -34,19 +36,17 @@ browser acceptance checks are required before real-account use.
 %autosetup
 
 %build
-export CARGO_HOME="$PWD/.cargo-home"
 %make_build build CARGO=cargo
+python3 tools/licenses.py
 
 %check
-export CARGO_HOME="$PWD/.cargo-home"
 %make_build test CARGO=cargo
 
 %install
 %make_install BINARY=target/release/fidophir
-install -Dm644 DEPENDENCIES.tsv %{buildroot}%{_docdir}/%{name}/DEPENDENCIES.tsv
-# Keep complete bundled source licenses, not just the host's license.
+install -Dm644 build/licenses/DEPENDENCIES.tsv %{buildroot}%{_docdir}/%{name}/DEPENDENCIES.tsv
 mkdir -p %{buildroot}%{_licensedir}/%{name}/third-party
-cp -a licenses/. %{buildroot}%{_licensedir}/%{name}/third-party/
+cp -a build/licenses/. %{buildroot}%{_licensedir}/%{name}/third-party/
 
 %post
 %{_libexecdir}/fidophir-package-setup prepare systemctl

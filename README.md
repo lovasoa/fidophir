@@ -110,15 +110,7 @@ On Fedora 44, install the build tools:
 sudo dnf install rust cargo gcc make clang-libs clang-devel pkgconf-pkg-config glib2-devel tpm2-tss-devel
 ```
 
-Rust and Cargo 1.92 or newer are required. From an extracted release source bundle:
-
-```sh
-sha256sum --check SHA256SUMS
-make build
-make test
-```
-
-Builds are locked and offline. For a Git checkout, fetch the pinned submodule and dependencies first:
+Rust and Cargo 1.92 or newer are required. From a Git checkout:
 
 ```sh
 git submodule update --init
@@ -128,5 +120,7 @@ cargo fetch --locked --manifest-path build/opensk/Cargo.toml
 make build
 make test
 ```
+
+Builds use locked dependency versions. Cargo downloads missing dependencies; after fetching them, builds can also run with `CARGO_NET_OFFLINE=true`.
 
 `make integration` additionally needs `swtpm`, `tpm2-tools`, `python3-fido2`, `python3-gobject` and `dbus-daemon`. It uses disposable simulators and a private D-Bus, not the host TPM or real accounts. Its test-only binary is not for deployment. See [validation](VALIDATION.md) for what the tests cover and what remains untested.
