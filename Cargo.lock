@@ -340,7 +340,6 @@ dependencies = [
  "opensk",
  "p256",
  "rand",
- "sha2",
  "sk-cbor",
  "subtle",
  "tss-esapi",

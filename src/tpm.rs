@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! TPM storage hierarchy. Signing scalars are generated and used only inside TPM.
 use crate::{Error, Result};
-use opensk::ctap::{cbor_read, cbor_write, secret::Secret};
+use opensk::{
+    api::crypto::{rust_crypto::SoftwareSha256, sha256::Sha256 as _},
+    ctap::{cbor_read, cbor_write, secret::Secret},
+};
 use rand::{TryRng, rngs::SysRng};
-use sha2::{Digest as _, Sha256};
 use sk_cbor::{Value, cbor_array};
 use tss_esapi::{
     Context,
@@ -377,7 +379,7 @@ impl Tpm {
         message: &[u8],
     ) -> Result<p256::ecdsa::Signature> {
         validate(&key.public, Kind::Signing)?;
-        let digest: [u8; 32] = Sha256::digest(message).into();
+        let digest = SoftwareSha256::digest(message);
         let signature = self.with_parent(record, hash, |ctx, p, _root| {
             let k = ctx.load(p, key.private.clone(), key.public.clone())?;
             ctx.execute_with_temporary_object(k.into(), |ctx, _| {

@@ -18,7 +18,6 @@ rand = { version = "0.10.3", default-features = false, features = ["std", "std_r
 tss-esapi = "7.6.0"
 uhid-virt = "0.0.8"
 p256 = { version = "0.14", default-features = false, features = ["alloc", "ecdsa"] }
-sha2 = "0.11"
 subtle = "2"
 
 [[bin]]
