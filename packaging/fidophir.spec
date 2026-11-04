@@ -1,7 +1,7 @@
 # Local Fedora 44 package using the locked, vendored source bundle.
 # This is not a claim of Fedora distribution package-policy approval.
 %global debug_package %{nil}
-%{!?fidophir_version:%global fidophir_version 0.1.0}
+%{!?fidophir_version:%global fidophir_version 0.1.1}
 Name:           fidophir
 Version:        %{fidophir_version}
 Release:        1%{?dist}

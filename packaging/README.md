@@ -14,7 +14,7 @@ For an RPM, install Fedora's `rpm-build` and the `BuildRequires` in `fidophir.sp
 
 ```sh
 mkdir -p dist/rpmbuild/SOURCES
-cp dist/fidophir-0.1.0.tar.gz dist/rpmbuild/SOURCES/
+cp dist/fidophir-0.1.1.tar.gz dist/rpmbuild/SOURCES/
 rpmbuild -ba --define "_topdir $(pwd)/dist/rpmbuild" packaging/fidophir.spec
 ```
 
@@ -34,4 +34,4 @@ The service runs as `fidophir`, with its private primary group and the unit's su
 
 ## Release builds
 
-The packages workflow tests and builds both formats on pushes to `main` and publishes successful builds on [GitHub Releases](https://github.com/lovasoa/fidophir/releases). Pull requests build without release permissions. Source bundles and checksums accompany the packages. Dependency automation proposes and tests updates; successful automated merges trigger the package workflow again. Simulator and package tests do not replace physical acceptance.
+The packages workflow tests and builds both formats on pushes to `main` and publishes successful builds on [GitHub Releases](https://github.com/lovasoa/fidophir/releases). Pull requests build without release permissions. Download assets are named `fidophir.rpm` and `fidophir.deb`; their labels and package metadata include a version derived from the commit history. Source bundles and checksums accompany the packages. Dependency automation proposes and tests updates; successful automated merges trigger the package workflow again. Simulator and package tests do not replace physical acceptance.

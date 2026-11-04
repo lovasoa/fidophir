@@ -56,12 +56,15 @@ jobs:
           ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
           submodules: true
+          fetch-depth: 0
       - name: Choose a unique, increasing package version
         id: version
         shell: bash
         run: |
           base=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
-          version="${base}+git${GITHUB_RUN_NUMBER}.${SOURCE_SHA:0:12}"
+          # Commit count increases along main history, even when old builds are rerun.
+          commit_count=$(git rev-list --count HEAD)
+          version="${base}+git${commit_count}.${SOURCE_SHA:0:12}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
       - name: Prepare pinned upstream sources and fetch locked dependencies
@@ -154,16 +157,28 @@ jobs:
       - name: Publish checksummed packages without rebuilding
         shell: bash
         run: |
+          shopt -s nullglob
+          rpm=(packages/*x86_64.rpm)
+          deb=(packages/*.deb)
+          source_rpm=(packages/*.src.rpm)
+          source_bundle=(packages/*.tar.gz)
+          [[ ${#rpm[@]} == 1 && ${#deb[@]} == 1 && ${#source_rpm[@]} == 1 && ${#source_bundle[@]} == 1 ]] || { echo 'Expected exactly one of each package'; exit 1; }
+          mv -- "${rpm[0]}" packages/fidophir.rpm
+          mv -- "${deb[0]}" packages/fidophir.deb
           (cd packages && sha256sum -- ./*.deb ./*.rpm ./*.tar.gz > SHA256SUMS)
           status=$(gh api "repos/${GH_REPO}/compare/${SOURCE_SHA}...main" --jq .status)
           [[ "$status" == ahead || "$status" == identical ]] || { echo 'Source is outside main history'; exit 1; }
           tag="build-${SOURCE_SHA}"
           printf 'Experimental fidophir build for commit `%s`.\n\nRead the README for supported package targets and physical acceptance before enrollment.\n' "$SOURCE_SHA" > release-notes.md
           if gh release view "$tag" > /dev/null 2>&1; then
-            gh release upload "$tag" packages/* --clobber
+            gh release edit "$tag" --title "fidophir $PACKAGE_VERSION" --notes-file release-notes.md
           else
-            gh release create "$tag" packages/* --target "$SOURCE_SHA" --title "fidophir $PACKAGE_VERSION" --notes-file release-notes.md --latest=false
+            gh release create "$tag" --target "$SOURCE_SHA" --title "fidophir $PACKAGE_VERSION" --notes-file release-notes.md --latest=false
           fi
+          gh release upload "$tag" \
+            "packages/fidophir.rpm#Fidophir $PACKAGE_VERSION (Fedora 44 RPM)" \
+            "packages/fidophir.deb#Fidophir $PACKAGE_VERSION (Debian 13 DEB)" \
+            "${source_rpm[0]}" "${source_bundle[0]}" packages/SHA256SUMS --clobber
           # A slower old build must not replace a newer main commit as Latest.
           if [ "$(gh api "repos/${GH_REPO}/commits/main" --jq .sha)" = "$SOURCE_SHA" ]; then
             gh release edit "$tag" --latest
