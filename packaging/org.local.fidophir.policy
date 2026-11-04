@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Fidophir</vendor>
+  <action id="org.local.fidophir.use">
+    <description>Approve use of the TPM passkey authenticator</description>
+    <message>Authenticate to $(operation)$(rp) with your TPM passkey</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_self</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.owner">unix-user:fidophir</annotate>
+  </action>
+</policyconfig>

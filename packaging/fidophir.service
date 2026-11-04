@@ -1,0 +1,55 @@
+[Unit]
+Description=Experimental TPM-backed FIDO passkey authenticator
+After=systemd-udev-trigger.service systemd-logind.service polkit.service dbus.service
+Wants=systemd-logind.service polkit.service
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=exec
+ExecStart=/usr/libexec/fidophir
+EnvironmentFile=/etc/fidophir/owner.conf
+UnsetEnvironment=TSS2_LOG DBUS_SYSTEM_BUS_ADDRESS DBUS_STARTER_ADDRESS DBUS_STARTER_BUS_TYPE
+User=fidophir
+Group=fidophir
+SupplementaryGroups=tss
+UMask=0077
+StateDirectory=fidophir
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/fidophir
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+KillMode=control-group
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=/dev/tpmrm0 rw
+DeviceAllow=/dev/uhid rw
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+LimitCORE=0
+MemorySwapMax=0
+TasksMax=32
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,53 @@
+[package]
+name = "opensk"
+version = "0.1.0"
+license = "Apache-2.0"
+edition = "2024"
+description = "OpenSK's CTAP2 (FIDO2) authenticator, as a library"
+repository = "https://github.com/google/OpenSK"
+readme = "README.md"
+keywords = ["fido2", "ctap2", "webauthn", "authenticator", "no_std"]
+categories = ["authentication", "cryptography", "embedded", "no-std"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+sk-cbor = { path = "../cbor", version = "0.2.0" }
+byteorder = { version = "1", default-features = false }
+arrayref = "0.3.6"
+subtle = { version = "2.2", default-features = false, features = ["nightly"] }
+arbitrary = { version = "1.4.2", features = ["derive"], optional = true }
+ed25519-compact = { version = "1", default-features = false, optional = true }
+rand_core = "0.10.1"
+rand = { version = "0.10.1", default-features = false, optional = true }
+sha2 = { version = "0.11.0", default-features = false, optional = true }
+hmac = { version = "0.13.0", default-features = false, optional = true }
+hkdf = { version = "0.13.0", default-features = false, optional = true }
+aes = { version = "0.9.0", default-features = false, optional = true }
+cbc = { version = "0.2.0", default-features = false, optional = true }
+zeroize = { version = "1.5.7", features = ["derive"] }
+wasefire-store = { version = "0.2.4", optional = true }
+
+[dependencies.p256]
+version = "0.14.0"
+default-features = false
+features = ["alloc", "ecdh", "ecdsa"]
+optional = true
+
+[features]
+resident_only = []
+default = ["config_command", "ctap1"]
+config_command = []
+debug_ctap = []
+std = ["wasefire-store/std", "rand?/std_rng", "software_crypto"]
+ctap1 = []
+vendor_hid = []
+fuzz = ["arbitrary", "std"]
+software_crypto = ["rand", "sha2", "hmac", "hkdf", "aes", "cbc", "p256"]
+ed25519 = []
+software_crypto_ed25519 = ["software_crypto", "ed25519", "ed25519-compact"]
+fingerprint = []
+
+[dev-dependencies]
+enum-iterator = "2.3.0"

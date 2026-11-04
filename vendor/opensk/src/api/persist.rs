@@ -1,0 +1,941 @@
+// Copyright 2024 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+pub mod keys;
+
+use crate::ctap::PIN_AUTH_LENGTH;
+use crate::ctap::data_formats::{extract_byte_string, extract_map, ok_or_missing};
+#[cfg(feature = "fingerprint")]
+use crate::ctap::fingerprint::TemplateInfo;
+use crate::ctap::secret::Secret;
+use crate::ctap::status_code::{Ctap2StatusCode, CtapResult};
+#[cfg(feature = "fingerprint")]
+use crate::ctap::{cbor_read, cbor_write};
+use alloc::borrow::Cow;
+use alloc::boxed::Box;
+#[cfg(feature = "fingerprint")]
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::cmp;
+use core::convert::TryFrom;
+#[cfg(test)]
+use enum_iterator::{Sequence, all};
+use sk_cbor as cbor;
+use sk_cbor::destructure_cbor_map;
+
+pub const AAGUID_LENGTH: usize = 16;
+
+pub type PersistIter<'a> = Box<dyn Iterator<Item = CtapResult<usize>> + 'a>;
+pub type PersistCredentialIter<'a> = Box<dyn Iterator<Item = CtapResult<(usize, Vec<u8>)>> + 'a>;
+pub type LargeBlobBuffer = Vec<u8>;
+
+/// Stores data that persists across reboots.
+///
+/// This trait might get appended to with new versions of CTAP.
+///
+/// The default implementations using the key-value store have assumptions on the ranges for key
+/// and value, if you decide to use them:
+/// - Keys within 0 and 4095 are supported.
+/// - Values of at most 1023 bytes are supported.
+///
+/// To implement this trait, you have 2 options:
+/// - Implement all high level functions with default implementations,
+///   calling `unimplemented!` in the key-value accessors.
+///   When we update this trait in a new version, OpenSK will panic when calling any new functions.
+///   If you need special implementation for new functions, you need to manually add them.
+/// - Implement the key-value accessors, and special case as many default implemented high level
+///   functions as desired.
+///   When the trait gets extended, new features will silently work.
+///   Credentials still need keys to be identified by.
+pub trait Persist {
+    /// Retrieves the value for a given key.
+    fn find(&self, key: usize) -> CtapResult<Option<Vec<u8>>>;
+
+    /// Inserts the value at the given key.
+    fn insert(&mut self, key: usize, value: &[u8]) -> CtapResult<()>;
+
+    /// Removes a key, if present.
+    fn remove(&mut self, key: usize) -> CtapResult<()>;
+
+    /// Iterator for all present keys.
+    fn iter(&self) -> CtapResult<PersistIter<'_>>;
+
+    /// Checks consistency on boot, and if necessary fixes problems or initializes.
+    ///
+    /// Calling this function after successful init should be a NO-OP.
+    fn init(&mut self) -> CtapResult<()> {
+        if self.find(keys::RESET_COMPLETION)?.is_some() {
+            self.reset()?;
+        }
+        Ok(())
+    }
+
+    /// Returns the byte array representation of a stored credential.
+    fn credential_bytes(&self, key: usize) -> CtapResult<Vec<u8>> {
+        if !keys::CREDENTIALS.contains(&key) {
+            return Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR);
+        }
+        self.find(key)?
+            .ok_or(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
+    }
+
+    /// Writes a credential at the given key.
+    fn write_credential_bytes(&mut self, key: usize, value: &[u8]) -> CtapResult<()> {
+        if !keys::CREDENTIALS.contains(&key) {
+            return Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR);
+        }
+        self.insert(key, value)
+    }
+
+    /// Removes a credential at the given key.
+    fn remove_credential(&mut self, key: usize) -> CtapResult<()> {
+        if !keys::CREDENTIALS.contains(&key) {
+            return Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR);
+        }
+        self.remove(key)
+    }
+
+    /// Iterates all stored credentials.
+    fn iter_credentials(&self) -> CtapResult<PersistCredentialIter<'_>> {
+        Ok(Box::new(self.iter()?.filter_map(move |key| match key {
+            Ok(k) => {
+                if keys::CREDENTIALS.contains(&k) {
+                    match self.find(k) {
+                        Ok(Some(v)) => Some(Ok((k, v))),
+                        Ok(None) => None,
+                        Err(e) => Some(Err(e)),
+                    }
+                } else {
+                    None
+                }
+            }
+            Err(e) => Some(Err(e)),
+        })))
+    }
+
+    /// Returns a key where a new credential can be inserted.
+    fn free_credential_key(&self) -> CtapResult<usize> {
+        for key in keys::CREDENTIALS {
+            if self.find(key)?.is_none() {
+                return Ok(key);
+            }
+        }
+        Err(Ctap2StatusCode::CTAP2_ERR_KEY_STORE_FULL)
+    }
+
+    /// Returns the global signature counter.
+    fn global_signature_counter(&self) -> CtapResult<u32> {
+        const INITIAL_SIGNATURE_COUNTER: u32 = 1;
+        match self.find(keys::GLOBAL_SIGNATURE_COUNTER)? {
+            None => Ok(INITIAL_SIGNATURE_COUNTER),
+            Some(value) if value.len() == 4 => Ok(u32::from_ne_bytes(*array_ref!(&value, 0, 4))),
+            Some(_) => Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR),
+        }
+    }
+
+    /// Increments the global signature counter.
+    fn incr_global_signature_counter(&mut self, increment: u32) -> CtapResult<()> {
+        let old_value = self.global_signature_counter()?;
+        // In hopes that servers handle the wrapping gracefully.
+        let new_value = old_value.wrapping_add(increment);
+        self.insert(keys::GLOBAL_SIGNATURE_COUNTER, &new_value.to_ne_bytes())
+    }
+
+    /// Returns the PIN hash if defined.
+    fn pin_hash(&self) -> CtapResult<Option<[u8; PIN_AUTH_LENGTH]>> {
+        let pin_properties = match self.find(keys::PIN_PROPERTIES)? {
+            None => return Ok(None),
+            Some(pin_properties) => pin_properties,
+        };
+        if pin_properties.len() != 1 + PIN_AUTH_LENGTH {
+            return Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR);
+        }
+        Ok(Some(*array_ref![pin_properties, 1, PIN_AUTH_LENGTH]))
+    }
+
+    /// Returns the length of the currently set PIN if defined.
+    #[cfg(feature = "config_command")]
+    fn pin_code_point_length(&self) -> CtapResult<Option<u8>> {
+        let pin_properties = match self.find(keys::PIN_PROPERTIES)? {
+            None => return Ok(None),
+            Some(pin_properties) => pin_properties,
+        };
+        if pin_properties.is_empty() {
+            return Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR);
+        }
+        Ok(Some(pin_properties[0]))
+    }
+
+    /// Sets the PIN hash and length.
+    ///
+    /// If it was already defined, it is updated.
+    fn set_pin(
+        &mut self,
+        pin_hash: &[u8; PIN_AUTH_LENGTH],
+        pin_code_point_length: u8,
+    ) -> CtapResult<()> {
+        let mut pin_properties = [0; 1 + PIN_AUTH_LENGTH];
+        pin_properties[0] = pin_code_point_length;
+        pin_properties[1..].clone_from_slice(pin_hash);
+        self.insert(keys::PIN_PROPERTIES, &pin_properties[..])?;
+        // If power fails between these 2 transactions, PIN has to be set again.
+        self.remove(keys::FORCE_PIN_CHANGE)
+    }
+
+    /// Returns the number of failed PIN attempts.
+    fn pin_fails(&self) -> CtapResult<u8> {
+        match self.find(keys::PIN_RETRIES)? {
+            None => Ok(0),
+            Some(value) if value.len() == 1 => Ok(value[0]),
+            _ => Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR),
+        }
+    }
+
+    /// Decrements the number of remaining PIN retries.
+    fn incr_pin_fails(&mut self) -> CtapResult<()> {
+        let old_value = self.pin_fails()?;
+        let new_value = old_value.saturating_add(1);
+        self.insert(keys::PIN_RETRIES, &[new_value])
+    }
+
+    /// Resets the number of remaining PIN retries.
+    fn reset_pin_retries(&mut self) -> CtapResult<()> {
+        self.remove(keys::PIN_RETRIES)
+    }
+
+    /// Returns the number of failed UV attempts.
+    #[cfg(feature = "fingerprint")]
+    fn uv_fails(&self) -> CtapResult<u8> {
+        match self.find(keys::UV_RETRIES)? {
+            None => Ok(0),
+            Some(value) if value.len() == 1 => Ok(value[0]),
+            _ => Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR),
+        }
+    }
+
+    /// Decrements the number of remaining UV retries.
+    #[cfg(feature = "fingerprint")]
+    fn incr_uv_fails(&mut self) -> CtapResult<()> {
+        let old_value = self.uv_fails()?;
+        let new_value = old_value.saturating_add(1);
+        self.insert(keys::UV_RETRIES, &[new_value])
+    }
+
+    /// Resets the number of remaining UV retries.
+    #[cfg(feature = "fingerprint")]
+    fn reset_uv_retries(&mut self) -> CtapResult<()> {
+        self.remove(keys::UV_RETRIES)
+    }
+
+    /// Returns the minimum PIN length, if stored.
+    fn min_pin_length(&self) -> CtapResult<Option<u8>> {
+        match self.find(keys::MIN_PIN_LENGTH)? {
+            None => Ok(None),
+            Some(value) if value.len() == 1 => Ok(Some(value[0])),
+            _ => Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR),
+        }
+    }
+
+    /// Sets the minimum PIN length.
+    #[cfg(feature = "config_command")]
+    fn set_min_pin_length(&mut self, min_pin_length: u8) -> CtapResult<()> {
+        self.insert(keys::MIN_PIN_LENGTH, &[min_pin_length])
+    }
+
+    /// Returns the list of RP IDs that may read the minimum PIN length.
+    ///
+    /// Defaults to an empty vector if not found.
+    fn min_pin_length_rp_ids_bytes(&self) -> CtapResult<Vec<u8>> {
+        Ok(self
+            .find(keys::MIN_PIN_LENGTH_RP_IDS)?
+            .unwrap_or(Vec::new()))
+    }
+
+    /// Sets the list of RP IDs that may read the minimum PIN length.
+    #[cfg(feature = "config_command")]
+    fn set_min_pin_length_rp_ids(&mut self, min_pin_length_rp_ids_bytes: &[u8]) -> CtapResult<()> {
+        self.insert(keys::MIN_PIN_LENGTH_RP_IDS, min_pin_length_rp_ids_bytes)
+    }
+
+    /// Prepares writing a new large blob.
+    ///
+    /// Returns a buffer that is returned to other API calls for potential usage.
+    fn init_large_blob(&mut self, expected_length: usize) -> CtapResult<LargeBlobBuffer> {
+        Ok(Vec::with_capacity(expected_length))
+    }
+
+    /// Writes a large blob chunk to the buffer.
+    ///
+    /// This can be the passed in buffer, or a custom solution.
+    fn write_large_blob_chunk(
+        &mut self,
+        offset: usize,
+        chunk: &[u8],
+        buffer: &mut LargeBlobBuffer,
+    ) -> CtapResult<()> {
+        if buffer.len() != offset {
+            // This should be caught on CTAP level.
+            return Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR);
+        }
+        buffer.extend_from_slice(chunk);
+        Ok(())
+    }
+
+    /// Reads the byte vector stored as the serialized large blobs array.
+    ///
+    /// If too few bytes exist at that offset, return the maximum number
+    /// available. This includes cases of offset being beyond the stored array.
+    ///
+    /// The buffer is passed in when writing is in process.
+    fn get_large_blob<'a>(
+        &self,
+        mut offset: usize,
+        byte_count: usize,
+        buffer: Option<&'a LargeBlobBuffer>,
+    ) -> CtapResult<Option<Cow<'a, [u8]>>> {
+        if let Some(buffer) = buffer {
+            let start = cmp::min(offset, buffer.len());
+            let end = offset.saturating_add(byte_count);
+            let end = cmp::min(end, buffer.len());
+            return Ok(Some(Cow::from(&buffer[start..end])));
+        }
+        let mut result = Vec::with_capacity(byte_count);
+        for key in keys::LARGE_BLOB_SHARDS {
+            let value = self.find(key)?.unwrap_or(Vec::new());
+            if key == keys::LARGE_BLOB_SHARDS.start && value.is_empty() {
+                return Ok(None);
+            }
+            if offset < value.len() {
+                let end = offset.saturating_add(byte_count - result.len());
+                let end = cmp::min(end, value.len());
+                result.extend(&value[offset..end]);
+            }
+            if result.len() == byte_count || value.len() < VALUE_LENGTH {
+                break;
+            }
+            offset = offset.saturating_sub(VALUE_LENGTH);
+        }
+        Ok(Some(Cow::from(result)))
+    }
+
+    /// Sets a byte vector as the serialized large blobs array.
+    fn commit_large_blob_array(&mut self, buffer: &LargeBlobBuffer) -> CtapResult<()> {
+        debug_assert!(buffer.len() <= keys::LARGE_BLOB_SHARDS.len() * VALUE_LENGTH);
+        let mut offset = 0;
+        for key in keys::LARGE_BLOB_SHARDS {
+            let cur_len = cmp::min(buffer.len().saturating_sub(offset), VALUE_LENGTH);
+            let slice = &buffer[offset..][..cur_len];
+            if slice.is_empty() {
+                self.remove(key)?;
+            } else {
+                self.insert(key, slice)?;
+            }
+            offset += cur_len;
+        }
+        Ok(())
+    }
+
+    /// Resets persistent data, consistent with a CTAP reset.
+    ///
+    /// In particular, entries that are persistent across factory reset are not removed.
+    fn reset(&mut self) -> CtapResult<()> {
+        self.insert(keys::RESET_COMPLETION, &[])?;
+        let mut removed_keys = Vec::new();
+        for key in self.iter()? {
+            let key = key?;
+            if key >= keys::NUM_PERSISTENT_KEYS && key != keys::RESET_COMPLETION {
+                removed_keys.push(key);
+            }
+        }
+        for key in removed_keys {
+            self.remove(key)?;
+        }
+        self.remove(keys::RESET_COMPLETION)
+    }
+
+    /// Returns whether the PIN needs to be changed before its next usage.
+    fn has_force_pin_change(&self) -> CtapResult<bool> {
+        match self.find(keys::FORCE_PIN_CHANGE)? {
+            None => Ok(false),
+            Some(value) if value.is_empty() => Ok(true),
+            _ => Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR),
+        }
+    }
+
+    /// Marks the PIN as outdated with respect to the new PIN policy.
+    #[cfg(feature = "config_command")]
+    fn force_pin_change(&mut self) -> CtapResult<()> {
+        self.insert(keys::FORCE_PIN_CHANGE, &[])
+    }
+
+    /// Returns whether enterprise attestation is enabled.
+    #[cfg(feature = "config_command")]
+    fn enterprise_attestation(&self) -> CtapResult<bool> {
+        match self.find(keys::ENTERPRISE_ATTESTATION)? {
+            None => Ok(false),
+            Some(value) if value.is_empty() => Ok(true),
+            _ => Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR),
+        }
+    }
+
+    /// Marks enterprise attestation as enabled.
+    #[cfg(feature = "config_command")]
+    fn enable_enterprise_attestation(&mut self) -> CtapResult<()> {
+        if self.get_attestation(AttestationId::Enterprise)?.is_none() {
+            return Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR);
+        }
+        self.insert(keys::ENTERPRISE_ATTESTATION, &[])
+    }
+
+    /// Returns whether alwaysUv is enabled.
+    fn has_always_uv(&self) -> CtapResult<bool> {
+        match self.find(keys::ALWAYS_UV)? {
+            None => Ok(false),
+            Some(value) if value.is_empty() => Ok(true),
+            _ => Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR),
+        }
+    }
+
+    /// Enables alwaysUv, when disabled, and vice versa.
+    #[cfg(feature = "config_command")]
+    fn toggle_always_uv(&mut self) -> CtapResult<()> {
+        if self.has_always_uv()? {
+            Ok(self.remove(keys::ALWAYS_UV)?)
+        } else {
+            Ok(self.insert(keys::ALWAYS_UV, &[])?)
+        }
+    }
+
+    /// Lists all stored template IDs.
+    #[cfg(feature = "fingerprint")]
+    fn template_infos(&self) -> CtapResult<Vec<TemplateInfo>> {
+        let mut id_list = Vec::new();
+        for key in keys::FRIENDLY_NAMES {
+            if let Some(data) = self.find(key)? {
+                let cbor_value = cbor_read(&data)
+                    .map_err(|_| Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?;
+                let template_info = TemplateInfo::try_from(cbor_value)?;
+                id_list.push(template_info);
+            }
+        }
+        Ok(id_list)
+    }
+
+    /// Stores a new template ID.
+    ///
+    /// We shouldn't try to create the same template ID twice, so if it already
+    /// exists, return an internal error.
+    ///
+    /// Returns `Err(CTAP2_ERR_FP_DATABASE_FULL)` if the storage is full.
+    #[cfg(feature = "fingerprint")]
+    fn store_template_id(&mut self, template_id: Vec<u8>) -> CtapResult<()> {
+        let mut new_key = None;
+        for key in keys::FRIENDLY_NAMES {
+            if let Some(data) = self.find(key)? {
+                let cbor_value = cbor_read(&data)
+                    .map_err(|_| Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?;
+                let template_info = TemplateInfo::try_from(cbor_value)?;
+                if template_info.template_id == template_id {
+                    return Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR);
+                }
+            } else if new_key.is_none() {
+                new_key = Some(key);
+            }
+        }
+        if let Some(key) = new_key {
+            let template_info = TemplateInfo {
+                template_id,
+                template_friendly_name: None,
+            };
+            let mut data = Vec::new();
+            cbor_write(cbor::Value::from(template_info), &mut data)?;
+            self.insert(key, &data)?;
+            Ok(())
+        } else {
+            Err(Ctap2StatusCode::CTAP2_ERR_FP_DATABASE_FULL)
+        }
+    }
+
+    /// Removes the template information matching the template ID.
+    ///
+    /// Returns `Err(CTAP2_ERR_INVALID_OPTION)` if the template was not found.
+    #[cfg(feature = "fingerprint")]
+    fn remove_template_id(&mut self, template_id: &[u8]) -> CtapResult<()> {
+        for key in keys::FRIENDLY_NAMES {
+            if let Some(data) = self.find(key)? {
+                let cbor_value = cbor_read(&data)
+                    .map_err(|_| Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?;
+                let template_info = TemplateInfo::try_from(cbor_value)?;
+                if template_info.template_id == template_id {
+                    self.remove(key)?;
+                    return Ok(());
+                }
+            }
+        }
+        Err(Ctap2StatusCode::CTAP2_ERR_INVALID_OPTION)
+    }
+
+    /// Retrieve the BioEnrollment friendly name for a given template ID.
+    ///
+    /// Returns `Ok(None)` if the template was not found or no friendly name was set.
+    #[cfg(test)]
+    #[cfg(feature = "fingerprint")]
+    fn get_friendly_name(&self, template_id: &[u8]) -> CtapResult<Option<String>> {
+        for key in keys::FRIENDLY_NAMES {
+            if let Some(data) = self.find(key)? {
+                let cbor_value = cbor_read(&data)
+                    .map_err(|_| Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?;
+                let template_info = TemplateInfo::try_from(cbor_value)?;
+                if template_info.template_id == template_id {
+                    return Ok(template_info.template_friendly_name);
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    /// Store a BioEnrollment friendly name for a given template ID.
+    ///
+    /// Returns `Err(CTAP2_ERR_INVALID_OPTION)` if the template was not found.
+    #[cfg(feature = "fingerprint")]
+    fn store_friendly_name(&mut self, template_id: &[u8], friendly_name: String) -> CtapResult<()> {
+        for key in keys::FRIENDLY_NAMES {
+            if let Some(bytes) = self.find(key)? {
+                let cbor_value = cbor_read(&bytes)
+                    .map_err(|_| Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?;
+                let mut template_info = TemplateInfo::try_from(cbor_value)?;
+                if template_info.template_id == template_id {
+                    template_info.template_friendly_name = Some(friendly_name);
+                    let mut data = Vec::new();
+                    cbor_write(cbor::Value::from(template_info), &mut data)?;
+                    self.insert(key, &data)?;
+                    return Ok(());
+                }
+            }
+        }
+        Err(Ctap2StatusCode::CTAP2_ERR_INVALID_OPTION)
+    }
+
+    fn get_attestation(&self, id: AttestationId) -> CtapResult<Option<Attestation>> {
+        let stored_id_bytes = self.find(keys::ATTESTATION_ID)?;
+        match stored_id_bytes.as_deref() {
+            Some([byte]) if AttestationId::try_from(*byte)? == id => (),
+            Some([_]) | None => return Ok(None),
+            _ => return Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR),
+        }
+        let wrapped_private_key = self.find(keys::ATTESTATION_PRIVATE_KEY)?;
+        let certificate = self.find(keys::ATTESTATION_CERTIFICATE)?;
+        let (wrapped_private_key, certificate) = match (wrapped_private_key, certificate) {
+            (Some(x), Some(y)) => (x, y),
+            (None, None) => return Ok(None),
+            _ => return Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR),
+        };
+        Ok(Some(Attestation {
+            wrapped_private_key,
+            certificate,
+        }))
+    }
+
+    fn set_attestation(
+        &mut self,
+        id: AttestationId,
+        attestation: Option<&Attestation>,
+    ) -> CtapResult<()> {
+        // To overwrite, first call with None, then call again, to avoid mistakes.
+        let stored_id_bytes = self.find(keys::ATTESTATION_ID)?;
+        match (stored_id_bytes.as_deref(), attestation) {
+            (None, _) => (),
+            (Some([byte]), None) if AttestationId::try_from(*byte)? == id => (),
+            _ => return Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR),
+        }
+        // We set attestation storage in 3 transactions. If that gets interrupted halfway,
+        // Register and MakeCredential will error when being called. Needs to be redone then.
+        // ID is set last to allow idempotent rewrites.
+        match attestation {
+            None => {
+                self.remove(keys::ATTESTATION_PRIVATE_KEY)?;
+                self.remove(keys::ATTESTATION_CERTIFICATE)?;
+                self.remove(keys::ATTESTATION_ID)?;
+            }
+            Some(attestation) => {
+                self.insert(
+                    keys::ATTESTATION_PRIVATE_KEY,
+                    &attestation.wrapped_private_key,
+                )?;
+                self.insert(keys::ATTESTATION_CERTIFICATE, &attestation.certificate)?;
+                self.insert(keys::ATTESTATION_ID, &[id as u8])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns the programmed AAGUID, defaulting to all zeros if not set.
+    fn aaguid(&self) -> CtapResult<[u8; AAGUID_LENGTH]> {
+        match self.find(keys::AAGUID)? {
+            None => Ok([0; AAGUID_LENGTH]),
+            Some(value) if value.len() == AAGUID_LENGTH => {
+                let mut aaguid = [0; AAGUID_LENGTH];
+                aaguid.copy_from_slice(&value);
+                Ok(aaguid)
+            }
+            _ => Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR),
+        }
+    }
+
+    /// Sets the AAGUID.
+    fn set_aaguid(&mut self, aaguid: &[u8; AAGUID_LENGTH]) -> CtapResult<()> {
+        self.insert(keys::AAGUID, aaguid)
+    }
+
+    fn key_store_bytes(&self) -> CtapResult<Option<Secret<[u8]>>> {
+        let bytes = self.find(keys::KEY_STORE)?;
+        Ok(bytes.map(|b| {
+            let mut secret = Secret::new(b.len());
+            secret.copy_from_slice(&b);
+            secret
+        }))
+    }
+
+    fn write_key_store_bytes(&mut self, bytes: &[u8]) -> CtapResult<()> {
+        self.insert(keys::KEY_STORE, bytes)
+    }
+}
+
+const VALUE_LENGTH: usize = 1023;
+
+/// Identifies an attestation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(test, derive(Sequence))]
+pub enum AttestationId {
+    Batch = 0x01,
+    Enterprise = 0x02,
+}
+
+impl TryFrom<u8> for AttestationId {
+    type Error = Ctap2StatusCode;
+
+    fn try_from(byte: u8) -> CtapResult<Self> {
+        match byte {
+            0x01 => Ok(Self::Batch),
+            0x02 => Ok(Self::Enterprise),
+            _ => Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attestation {
+    /// ECDSA private key, wrapping is implementation specific.
+    ///
+    /// The wrapping needs to work together with your `ecdsa::SecretKey` implementation.
+    pub wrapped_private_key: Vec<u8>,
+    pub certificate: Vec<u8>,
+}
+
+impl TryFrom<cbor::Value> for Attestation {
+    type Error = Ctap2StatusCode;
+
+    fn try_from(cbor_value: cbor::Value) -> CtapResult<Self> {
+        destructure_cbor_map! {
+            let {
+                0x01 => certificate,
+                0x02 => wrapped_private_key,
+            } = extract_map(cbor_value)?;
+        }
+        let certificate = extract_byte_string(ok_or_missing(certificate)?)?;
+        let wrapped_private_key = extract_byte_string(ok_or_missing(wrapped_private_key)?)?;
+        Ok(Attestation {
+            wrapped_private_key,
+            certificate,
+        })
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::api::customization::Customization;
+    use crate::api::rng::Rng;
+    use crate::env::Env;
+    use crate::env::test::TestEnv;
+    use sk_cbor::cbor_map;
+
+    #[test]
+    fn test_max_large_blob_array_size() {
+        let env = TestEnv::default();
+
+        assert!(
+            env.customization().max_large_blob_array_size()
+                <= VALUE_LENGTH * keys::LARGE_BLOB_SHARDS.len()
+        );
+    }
+
+    #[test]
+    fn test_from_into_attestation_id() {
+        for id in all::<AttestationId>() {
+            assert_eq!(id, AttestationId::try_from(id as u8).unwrap());
+        }
+        assert_eq!(
+            AttestationId::try_from(0x03),
+            Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
+        );
+    }
+
+    #[test]
+    fn test_global_signature_counter() {
+        let mut env = TestEnv::default();
+        let persist = env.persist();
+
+        let mut counter_value = persist.global_signature_counter().unwrap();
+        for increment in 1..10 {
+            assert!(persist.incr_global_signature_counter(increment).is_ok());
+            counter_value += increment;
+            assert_eq!(persist.global_signature_counter().unwrap(), counter_value);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "config_command")]
+    fn test_force_pin_change() {
+        let mut env = TestEnv::default();
+        let persist = env.persist();
+
+        assert!(!persist.has_force_pin_change().unwrap());
+        assert_eq!(persist.force_pin_change(), Ok(()));
+        assert!(persist.has_force_pin_change().unwrap());
+        assert_eq!(persist.set_pin(&[0x88; 16], 8), Ok(()));
+        assert!(!persist.has_force_pin_change().unwrap());
+    }
+
+    #[test]
+    fn test_pin_hash_and_length() {
+        let mut env = TestEnv::default();
+        let random_data = env.rng().gen_uniform_u8x32();
+        let persist = env.persist();
+
+        // Pin hash is initially not set.
+        assert!(persist.pin_hash().unwrap().is_none());
+        #[cfg(feature = "config_command")]
+        assert!(persist.pin_code_point_length().unwrap().is_none());
+
+        // Setting the pin sets the pin hash.
+        assert_eq!(random_data.len(), 2 * PIN_AUTH_LENGTH);
+        let pin_hash_1 = *array_ref!(random_data, 0, PIN_AUTH_LENGTH);
+        let pin_hash_2 = *array_ref!(random_data, PIN_AUTH_LENGTH, PIN_AUTH_LENGTH);
+        let pin_length_1 = 4;
+        let pin_length_2 = 63;
+        assert_eq!(persist.set_pin(&pin_hash_1, pin_length_1), Ok(()));
+        assert_eq!(persist.pin_hash().unwrap(), Some(pin_hash_1));
+        #[cfg(feature = "config_command")]
+        assert_eq!(persist.pin_code_point_length().unwrap(), Some(pin_length_1));
+        assert_eq!(persist.set_pin(&pin_hash_2, pin_length_2), Ok(()));
+        assert_eq!(persist.pin_hash().unwrap(), Some(pin_hash_2));
+        #[cfg(feature = "config_command")]
+        assert_eq!(persist.pin_code_point_length().unwrap(), Some(pin_length_2));
+
+        // Resetting the storage resets the pin hash.
+        assert_eq!(persist.reset(), Ok(()));
+        assert!(persist.pin_hash().unwrap().is_none());
+        #[cfg(feature = "config_command")]
+        assert!(persist.pin_code_point_length().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_pin_fails() {
+        let mut env = TestEnv::default();
+        let persist = env.persist();
+
+        assert_eq!(persist.pin_fails().unwrap(), 0);
+        assert_eq!(persist.incr_pin_fails(), Ok(()));
+        assert_eq!(persist.pin_fails().unwrap(), 1);
+        assert_eq!(persist.reset_pin_retries(), Ok(()));
+        assert_eq!(persist.pin_fails().unwrap(), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "fingerprint")]
+    fn test_uv_fails() {
+        let mut env = TestEnv::default();
+        let persist = env.persist();
+
+        assert_eq!(persist.uv_fails().unwrap(), 0);
+        assert_eq!(persist.incr_uv_fails(), Ok(()));
+        assert_eq!(persist.uv_fails().unwrap(), 1);
+        assert_eq!(persist.reset_uv_retries(), Ok(()));
+        assert_eq!(persist.uv_fails().unwrap(), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "fingerprint")]
+    fn test_fingerprint_template_id() {
+        let mut env = TestEnv::default();
+        let persist = env.persist();
+
+        assert_eq!(persist.template_infos().unwrap(), vec![]);
+        assert_eq!(persist.store_template_id(vec![0x00]), Ok(()));
+        let template_info = &persist.template_infos().unwrap()[0];
+        assert_eq!(template_info.template_id, &[0x00]);
+        assert_eq!(template_info.template_friendly_name, None);
+        assert_eq!(persist.remove_template_id(&[0x00]), Ok(()));
+        assert_eq!(persist.template_infos().unwrap(), vec![]);
+        assert_eq!(
+            persist.remove_template_id(&[0x00]),
+            Err(Ctap2StatusCode::CTAP2_ERR_INVALID_OPTION)
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "fingerprint")]
+    fn test_fingerprint_friendly_name() {
+        let mut env = TestEnv::default();
+        let persist = env.persist();
+
+        assert_eq!(persist.get_friendly_name(&[0x00]).unwrap(), None);
+        assert_eq!(
+            persist.store_friendly_name(&[0x00], "Name".to_string()),
+            Err(Ctap2StatusCode::CTAP2_ERR_INVALID_OPTION)
+        );
+        assert_eq!(persist.store_template_id(vec![0x00]), Ok(()));
+        assert_eq!(
+            persist.store_friendly_name(&[0x00], "Name".to_string()),
+            Ok(())
+        );
+        assert_eq!(
+            persist.get_friendly_name(&[0x00]).unwrap(),
+            Some(String::from("Name"))
+        );
+        assert_eq!(persist.remove_template_id(&[0x00]), Ok(()));
+        assert_eq!(persist.get_friendly_name(&[0x00]).unwrap(), None);
+    }
+
+    #[test]
+    fn test_get_set_no_overwrite_attestation() {
+        let mut env = TestEnv::default();
+        let persist = env.persist();
+
+        assert_eq!(persist.get_attestation(AttestationId::Batch), Ok(None));
+        let attestation = Attestation {
+            wrapped_private_key: vec![0x55],
+            certificate: vec![0xCC],
+        };
+        assert_eq!(
+            persist.set_attestation(AttestationId::Batch, Some(&attestation)),
+            Ok(())
+        );
+        assert_eq!(
+            persist.get_attestation(AttestationId::Batch),
+            Ok(Some(attestation.clone()))
+        );
+        // Neither directly overwriting nor deleting the wrong ID works.
+        assert_eq!(
+            persist.set_attestation(AttestationId::Batch, Some(&attestation)),
+            Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
+        );
+        assert_eq!(
+            persist.set_attestation(AttestationId::Enterprise, None),
+            Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
+        );
+    }
+
+    #[test]
+    fn test_overwrite_attestation() {
+        let mut env = TestEnv::default();
+        let persist = env.persist();
+
+        let attestation1 = Attestation {
+            wrapped_private_key: vec![0x55],
+            certificate: vec![0xCC],
+        };
+        assert_eq!(
+            persist.set_attestation(AttestationId::Batch, Some(&attestation1)),
+            Ok(())
+        );
+        assert_eq!(
+            persist.set_attestation(AttestationId::Enterprise, None),
+            Err(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
+        );
+        assert_eq!(persist.set_attestation(AttestationId::Batch, None), Ok(()));
+        let attestation2 = Attestation {
+            wrapped_private_key: vec![0x66],
+            certificate: vec![0xDD],
+        };
+        assert_eq!(
+            persist.set_attestation(AttestationId::Enterprise, Some(&attestation2)),
+            Ok(())
+        );
+        assert_eq!(
+            persist.get_attestation(AttestationId::Enterprise),
+            Ok(Some(attestation2))
+        );
+    }
+
+    #[test]
+    fn test_from_cbor_attestation() {
+        let cbor_value = cbor_map! {
+            0x01 => vec![0xCC],
+            0x02 => vec![0x55],
+        };
+        let returned_attestation = Attestation::try_from(cbor_value).unwrap();
+        let expected_attestation = Attestation {
+            wrapped_private_key: vec![0x55],
+            certificate: vec![0xCC],
+        };
+        assert_eq!(returned_attestation, expected_attestation);
+    }
+
+    #[test]
+    fn test_aaguid() {
+        let mut env = TestEnv::default();
+        let persist = env.persist();
+
+        assert_eq!(persist.aaguid(), Ok([0; AAGUID_LENGTH]));
+
+        let test_aaguid = [1; AAGUID_LENGTH];
+        assert_eq!(persist.set_aaguid(&test_aaguid), Ok(()));
+        assert_eq!(persist.aaguid(), Ok(test_aaguid));
+    }
+
+    #[test]
+    fn test_get_large_blob_shards() {
+        let mut env = TestEnv::default();
+        let persist = env.persist();
+
+        assert_eq!(persist.get_large_blob(0, 10, None), Ok(None));
+        assert_eq!(persist.get_large_blob(VALUE_LENGTH, 10, None), Ok(None));
+
+        let blob: Vec<u8> = (0..(VALUE_LENGTH + 100)).map(|i| (i % 251) as u8).collect();
+        assert_eq!(persist.commit_large_blob_array(&blob), Ok(()));
+        assert_eq!(
+            persist
+                .get_large_blob(VALUE_LENGTH - 10, 30, None)
+                .unwrap()
+                .as_deref(),
+            Some(&blob[(VALUE_LENGTH - 10)..(VALUE_LENGTH + 20)])
+        );
+        assert_eq!(
+            persist
+                .get_large_blob(VALUE_LENGTH + 50, 100, None)
+                .unwrap()
+                .as_deref(),
+            Some(&blob[(VALUE_LENGTH + 50)..])
+        );
+        assert_eq!(
+            persist
+                .get_large_blob(VALUE_LENGTH + 200, 10, None)
+                .unwrap()
+                .as_deref(),
+            Some(&[][..])
+        );
+    }
+}

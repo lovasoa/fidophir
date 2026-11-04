@@ -1,0 +1,8 @@
+# Install as /usr/lib/udev/rules.d/72-fidophir.rules.
+# Runs after 70-uaccess, before 73-seat-late applies ACLs.
+# Only the dedicated service receives UHID creation access.
+SUBSYSTEM=="misc", KERNEL=="uhid", OWNER="root", GROUP="fidophir", MODE="0660", TAG-="uaccess"
+
+# Import the HID parent's uevent identity before matching the child hidraw node.
+SUBSYSTEM=="hidraw", KERNELS=="0006:0000:0001.*", IMPORT{parent}="HID_*"
+SUBSYSTEM=="hidraw", KERNELS=="0006:0000:0001.*", ENV{HID_UNIQ}=="fidophir-v1", OWNER="root", GROUP="fidophir-client", MODE="0660", TAG-="uaccess"

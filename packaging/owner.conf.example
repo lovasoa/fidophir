@@ -1,0 +1,5 @@
+# Administrator creates /etc/fidophir/owner.conf, root:root, mode 0600.
+# Consumed by systemd EnvironmentFile; there is no custom config-file parser.
+# UID 1000 is ophir on the machine inspected for this plan.
+FIDOPHIR_OWNER_UID=1000
+FIDOPHIR_OWNER_SEAT=seat0
