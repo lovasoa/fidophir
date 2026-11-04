@@ -18,12 +18,13 @@ function fixture(options = {}) {
       },
     },
     actions: {
+      getWorkflowRun: async () => ({data: run}),
       listJobsForWorkflowRun: () => {},
       createWorkflowDispatch: async args => calls.push(['dispatch', args]),
     },
     repos: {
       compareCommitsWithBasehead: async () => ({data: {status: options.status || 'ahead',
-        files: options.files || [{filename: options.dependabot ? '.github/images/Dockerfile.rust' : 'Cargo.lock', status: 'modified'}]}}),
+        files: options.files || [{filename: options.dependabot ? 'packaging/images/rust/Dockerfile' : 'Cargo.lock', status: 'modified'}]}}),
       merge: async args => calls.push(['refresh', args]),
     },
     pulls: {
@@ -36,7 +37,7 @@ function fixture(options = {}) {
     {name: 'Test and build Fedora 44 RPM', conclusion: 'success'},
     {name: 'Build Debian 13 DEB', conclusion: options.deb || 'success'},
   ]};
-  const context = {repo: {owner: 'owner', repo: 'repo'}, payload: {workflow_run: run}};
+  const context = {repo: {owner: 'owner', repo: 'repo'}, payload: {workflow_run: {id: run.id}}};
   return {run, calls, execute: () => merge({github, context, core: {warning: () => {}}})};
 }
 

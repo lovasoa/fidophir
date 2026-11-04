@@ -1,7 +1,9 @@
 // This privileged gate is loaded from main and never executes candidate code.
 module.exports = async ({github, context, core}) => {
   const {owner, repo} = context.repo;
-  const run = context.payload.workflow_run;
+  // Webhook payloads omit fields such as path; use the full authenticated record.
+  const run = (await github.rest.actions.getWorkflowRun({owner, repo,
+    run_id: context.payload.workflow_run.id})).data;
   if (run.conclusion !== 'success' || run.head_repository?.full_name !== `${owner}/${repo}`
       || run.path !== '.github/workflows/packages.yml'
       || !['pull_request', 'workflow_dispatch'].includes(run.event)) return;
@@ -25,7 +27,7 @@ module.exports = async ({github, context, core}) => {
   if (head !== run.head_sha) return; // An old successful run cannot approve a new head.
   const compare = (await github.rest.repos.compareCommitsWithBasehead({owner, repo, basehead: `main...${head}`})).data;
   const allowed = cargo ? /^(Cargo\.toml|Cargo\.lock|locks\/opensk\.Cargo\.lock)$/
-    : /^(\.github\/workflows\/[^/]+\.ya?ml|\.github\/images\/Dockerfile\.(rust|fedora)|vendor\/OpenSK)$/;
+    : /^(\.github\/workflows\/[^/]+\.ya?ml|packaging\/images\/(rust|fedora)\/Dockerfile|vendor\/OpenSK)$/;
   const refresh = async () => {
     if (cargo) {
       await github.rest.actions.createWorkflowDispatch({owner, repo, workflow_id: 'dependencies.yml',

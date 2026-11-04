@@ -227,7 +227,7 @@ validation; physical TPM/GNOME/Firefox acceptance remains separate.
 ## Automatic dependency maintenance
 
 Dependabot checks action pins, pinned build images and the OpenSK submodule daily.
-The Dockerfiles in `.github/images/` are the canonical CI image references. Fedora
+The Dockerfiles in `packaging/images/{fedora,rust}/` are the canonical CI image references. Fedora
 remains on the supported 44 release; Rust image updates retain the Debian Trixie
 variant. Native library packages are refreshed by dnf/apt on every package build.
 

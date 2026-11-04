@@ -9,7 +9,9 @@ updates:
         patterns: ['*']
         update-types: [minor, patch]
   - package-ecosystem: docker
-    directory: /.github/images
+    directories:
+      - /packaging/images/rust
+      - /packaging/images/fedora
     schedule:
       interval: daily
     ignore:

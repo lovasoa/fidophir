@@ -34,8 +34,8 @@ jobs:
         shell: bash
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Expected an exact commit SHA'; exit 1; }
-          echo "fedora=$(awk '$1 == "FROM" {print $2}' .github/images/Dockerfile.fedora)" >> "$GITHUB_OUTPUT"
-          echo "rust=$(awk '$1 == "FROM" {print $2}' .github/images/Dockerfile.rust)" >> "$GITHUB_OUTPUT"
+          echo "fedora=$(awk '$1 == "FROM" {print $2}' packaging/images/fedora/Dockerfile)" >> "$GITHUB_OUTPUT"
+          echo "rust=$(awk '$1 == "FROM" {print $2}' packaging/images/rust/Dockerfile)" >> "$GITHUB_OUTPUT"
   rpm:
     name: Test and build Fedora 44 RPM
     runs-on: ubuntu-latest
