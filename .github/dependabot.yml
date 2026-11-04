@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+    groups:
+      compatible-actions:
+        patterns: ['*']
+        update-types: [minor, patch]
+  - package-ecosystem: docker
+    directory: /.github/images
+    schedule:
+      interval: daily
+    ignore:
+      - dependency-name: fedora
+        update-types: [version-update:semver-major]
+  - package-ecosystem: gitsubmodule
+    directory: /
+    schedule:
+      interval: daily

@@ -31,7 +31,8 @@ def main():
         stage = Path(temporary) / name
         shutil.copytree(root, stage, ignore=shutil.ignore_patterns(
             "target", "dist", ".cargo-home", "__pycache__", "*.pyc", ".git", "vendor", "rpmbuild", "artifacts"))
-        (stage / "BUNDLED-SOURCES").write_text("OpenSK 8c81bc299886deb221beed35e2fe01a822649d67 + patches/opensk.patch\n")
+        revision = (stage / "build/opensk-revision").read_text().strip()
+        (stage / "BUNDLED-SOURCES").write_text(f"OpenSK {revision} + patches/opensk.patch\n")
         crates = stage / "vendor" / "crates"
         subprocess.run(["cargo", "vendor", "--frozen", "--versioned-dirs",
                         "--manifest-path", str(stage / "Cargo.toml"),

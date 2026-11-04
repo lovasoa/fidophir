@@ -1,0 +1,25 @@
+name: Merge tested dependency updates
+on:
+  workflow_run:
+    workflows: [Test and publish packages]
+    types: [completed]
+permissions:
+  contents: read
+jobs:
+  merge:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      # Always execute the gate from trusted main, never from the update/fork.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: await require('./tools/dependency-merge.cjs')({github, context, core})

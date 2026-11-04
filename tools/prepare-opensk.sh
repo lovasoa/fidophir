@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 if [ -f BUNDLED-SOURCES ]; then
     test -f build/opensk/src/api/pin.rs
     test -f build/cbor/Cargo.toml
+    test -f build/opensk-revision
     exit 0
 fi
 test -f vendor/OpenSK/libraries/opensk/Cargo.toml || {
@@ -19,3 +20,4 @@ done
 git apply --directory=build/opensk --check patches/opensk.patch
 git apply --directory=build/opensk patches/opensk.patch
 cp locks/opensk.Cargo.lock build/opensk/Cargo.lock
+git -C vendor/OpenSK rev-parse HEAD > build/opensk-revision

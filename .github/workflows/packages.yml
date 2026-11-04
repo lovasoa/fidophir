@@ -5,16 +5,42 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      source-sha:
+        description: Exact main-history commit to build (used by dependency automation)
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
+env:
+  SOURCE_SHA: ${{ inputs.source-sha || github.sha }}
+
 # No concurrency cancellation: every main commit gets its own tested release.
 jobs:
+  images:
+    name: Read pinned build images
+    runs-on: ubuntu-latest
+    outputs:
+      fedora: ${{ steps.images.outputs.fedora }}
+      rust: ${{ steps.images.outputs.rust }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+      - id: images
+        shell: bash
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Expected an exact commit SHA'; exit 1; }
+          echo "fedora=$(awk '$1 == "FROM" {print $2}' .github/images/Dockerfile.fedora)" >> "$GITHUB_OUTPUT"
+          echo "rust=$(awk '$1 == "FROM" {print $2}' .github/images/Dockerfile.rust)" >> "$GITHUB_OUTPUT"
   rpm:
     name: Test and build Fedora 44 RPM
     runs-on: ubuntu-latest
-    container: fedora:44
+    needs: images
+    container: ${{ needs.images.outputs.fedora }}
     timeout-minutes: 30
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -24,9 +50,10 @@ jobs:
           dnf install -y git rust cargo rustfmt clippy gcc make clang-devel
           pkgconf-pkg-config glib2-devel tpm2-tss-devel systemd-rpm-macros
           rpm-build redhat-rpm-config python3 swtpm tpm2-tools
-          python3-fido2 python3-gobject dbus-daemon
+          python3-fido2 python3-gobject dbus-daemon nodejs
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
           submodules: true
       - name: Choose a unique, increasing package version
@@ -34,7 +61,7 @@ jobs:
         shell: bash
         run: |
           base=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
-          version="${base}+git${GITHUB_RUN_NUMBER}.${GITHUB_SHA:0:12}"
+          version="${base}+git${GITHUB_RUN_NUMBER}.${SOURCE_SHA:0:12}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
       - name: Prepare pinned upstream sources and fetch locked dependencies
@@ -46,6 +73,7 @@ jobs:
         run: |
           cargo fmt --check
           cargo clippy --frozen --all-targets --features integration-tests -- -D warnings
+          node --test tests/dependency-merge.test.cjs
       - name: Run library and independent TPM/desktop integration tests
         run: |
           make test
@@ -69,9 +97,9 @@ jobs:
 
   deb:
     name: Build Debian 13 DEB
-    needs: rpm
+    needs: [images, rpm]
     runs-on: ubuntu-latest
-    container: rust:1.98.1-trixie@sha256:a8a5f0a1e5fe7dfe1d352591e4a1c7dd2c08fd70475cae872cf3458ba0df0546
+    container: ${{ needs.images.outputs.rust }}
     timeout-minutes: 30
     env:
       PACKAGE_VERSION: ${{ needs.rpm.outputs.version }}
@@ -92,7 +120,7 @@ jobs:
           tar -xzf "incoming/fidophir-${PACKAGE_VERSION}.tar.gz"
           cd "fidophir-${PACKAGE_VERSION}"
           sha256sum --check SHA256SUMS > /dev/null
-          dch --newversion "$PACKAGE_VERSION" --distribution unstable "Build commit $GITHUB_SHA."
+          dch --newversion "$PACKAGE_VERSION" --distribution unstable "Build commit $SOURCE_SHA."
           rustc --version
           cargo --version
           # Rust/Cargo are supplied by the pinned official image, not dpkg.
@@ -127,14 +155,16 @@ jobs:
         shell: bash
         run: |
           (cd packages && sha256sum -- ./*.deb ./*.rpm ./*.tar.gz > SHA256SUMS)
-          tag="build-${GITHUB_SHA}"
-          printf 'Experimental fidophir build for commit `%s`.\n\nTargets: Debian 13 amd64 and Fedora 44 x86_64.\n\nInstallation does not start the service. Read the README and physical acceptance checklist before enrollment.\n' "$GITHUB_SHA" > release-notes.md
+          status=$(gh api "repos/${GH_REPO}/compare/${SOURCE_SHA}...main" --jq .status)
+          [[ "$status" == ahead || "$status" == identical ]] || { echo 'Source is outside main history'; exit 1; }
+          tag="build-${SOURCE_SHA}"
+          printf 'Experimental fidophir build for commit `%s`.\n\nRead the README for supported package targets and physical acceptance before enrollment.\n' "$SOURCE_SHA" > release-notes.md
           if gh release view "$tag" > /dev/null 2>&1; then
             gh release upload "$tag" packages/* --clobber
           else
-            gh release create "$tag" packages/* --target "$GITHUB_SHA" --title "fidophir $PACKAGE_VERSION" --notes-file release-notes.md --latest=false
+            gh release create "$tag" packages/* --target "$SOURCE_SHA" --title "fidophir $PACKAGE_VERSION" --notes-file release-notes.md --latest=false
           fi
           # A slower old build must not replace a newer main commit as Latest.
-          if [ "$(gh api "repos/${GH_REPO}/commits/main" --jq .sha)" = "$GITHUB_SHA" ]; then
+          if [ "$(gh api "repos/${GH_REPO}/commits/main" --jq .sha)" = "$SOURCE_SHA" ]; then
             gh release edit "$tag" --latest
           fi

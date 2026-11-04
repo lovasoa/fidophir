@@ -223,3 +223,41 @@ libraries. Rust is external to dpkg, so CI skips dpkg's Build-Depends resolution
 check after explicitly installing the native dependencies. The package build itself
 and its tests remain offline. The first complete CI run is the reference packaging
 validation; physical TPM/GNOME/Firefox acceptance remains separate.
+
+## Automatic dependency maintenance
+
+Dependabot checks action pins, pinned build images and the OpenSK submodule daily.
+The Dockerfiles in `.github/images/` are the canonical CI image references. Fedora
+remains on the supported 44 release; Rust image updates retain the Debian Trixie
+variant. Native library packages are refreshed by dnf/apt on every package build.
+
+A daily Actions job installs the current cargo-edit with its published lockfile
+and uses standard `cargo upgrade`/`cargo update`, preparing OpenSK
+first and updating both application and engine-test lockfiles. Compatible and
+breaking Rust updates use separate managed branches, so an incompatible API update
+cannot hold up compatible fixes. Manifest ranges permit updates; committed lockfiles
+and frozen/offline builds continue to pin the exact sources and checksums.
+
+Candidates run the full existing test/DEB/RPM workflow with read-only repository
+permissions. A separate gate executes only main's code, accepts only owned bot
+branches or actual Dependabot PRs, checks the current head and both successful
+package jobs, and restricts changed paths to dependency metadata. Stale candidates
+are refreshed and retested. Cargo branches fast-forward main without forcing;
+Dependabot PRs merge with an expected-head guard. Conflicts and failing checks stay
+unmerged. Runtime source/TPM policy changes are never approved by this gate.
+
+After accepting an update, the gate explicitly dispatches the package workflow for
+that exact main-history commit. This is necessary because GitHub suppresses push
+workflows for changes made with GITHUB_TOKEN. Publication reruns all tests and both
+package builds, checks main ancestry, and publishes only on success, even if main
+has advanced in the meantime.
+
+There are no new PATs, third-party installed apps, or repository-wide workflow PR
+approval permissions. The current private plan has no required-check branch
+protection; the explicit gate supplies the dependency-specific checks. The merger's
+failure/staleness/file-scope cases are tested with Node's built-in test runner.
+
+Use the Actions **Update Cargo dependencies** workflow to check immediately;
+**Merge tested dependency updates** shows acceptance/refresh runs. Dependency
+branches named `automation/cargo-*` are managed by the bot; human changes there are
+preserved and cause the updater to stop rather than overwrite them.

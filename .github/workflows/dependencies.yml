@@ -1,0 +1,88 @@
+name: Update Cargo dependencies
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+    inputs:
+      track:
+        type: choice
+        options: [both, compatible, major]
+        default: both
+permissions:
+  contents: read
+jobs:
+  update:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    container: fedora:44
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        track: ${{ fromJSON(inputs.track == 'compatible' && '["compatible"]' || inputs.track == 'major' && '["major"]' || '["compatible","major"]') }}
+    concurrency:
+      group: cargo-update-${{ matrix.track }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      actions: write
+    env:
+      UPDATE_TRACK: ${{ matrix.track }}
+    steps:
+      - name: Install the standard Cargo updater
+        run: |
+          dnf install -y git rust cargo gcc openssl-devel pkgconf-pkg-config make
+          cargo install cargo-edit --locked --no-default-features --features upgrade
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Update manifests and both lockfiles
+        id: update
+        shell: bash
+        run: |
+          make prepare
+          if [[ "$UPDATE_TRACK" == major ]]; then
+            cargo upgrade --compatible ignore --incompatible allow
+            if git diff --quiet -- Cargo.toml; then
+              echo 'changed=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            cargo upgrade
+          fi
+          cargo update
+          cargo update --manifest-path build/opensk/Cargo.toml
+          cp build/opensk/Cargo.lock locks/opensk.Cargo.lock
+          if git diff --quiet -- Cargo.toml Cargo.lock locks/opensk.Cargo.lock; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish an isolated candidate branch and start its tests
+        if: steps.update.outputs.changed == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('node:fs');
+            const {owner, repo} = context.repo;
+            const track = process.env.UPDATE_TRACK;
+            if (!['compatible', 'major'].includes(track)) throw new Error('Unexpected update track');
+            const ref = `heads/automation/cargo-${track}`;
+            const base = (await github.rest.git.getCommit({owner, repo, commit_sha: context.sha})).data;
+            const paths = ['Cargo.toml', 'Cargo.lock', 'locks/opensk.Cargo.lock'];
+            const tree = await github.rest.git.createTree({owner, repo, base_tree: base.tree.sha,
+              tree: paths.map(path => ({path, mode: '100644', type: 'blob', content: fs.readFileSync(path, 'utf8')}))});
+            const commit = await github.rest.git.createCommit({owner, repo, tree: tree.data.sha,
+              parents: [context.sha], message: `chore(deps): update Cargo ${track} dependencies`});
+            let exists = false;
+            try {
+              const old = (await github.rest.git.getRef({owner, repo, ref})).data;
+              const author = (await github.rest.repos.getCommit({owner, repo, ref: old.object.sha})).data.author;
+              if (author?.login !== 'github-actions[bot]') throw new Error('Preserving a branch with human changes');
+              exists = true;
+            } catch (error) { if (error.status !== 404) throw error; }
+            if (exists) await github.rest.git.updateRef({owner, repo, ref, sha: commit.data.sha, force: true});
+            else await github.rest.git.createRef({owner, repo, ref: `refs/${ref}`, sha: commit.data.sha});
+            await github.rest.actions.createWorkflowDispatch({owner, repo, workflow_id: 'packages.yml',
+              ref: `automation/cargo-${track}`});
