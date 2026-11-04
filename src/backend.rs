@@ -130,7 +130,9 @@ impl Backend {
                 .borrow_mut()
                 .busy()
                 .unwrap_or_else(|_| fatal("UHID transport failed"));
-            match result.try_recv() {
+            // Wake immediately on completion; the timeout only bounds how long
+            // desktop dispatch, keepalives and cancellation can go unserviced.
+            match result.recv_timeout(Duration::from_millis(5)) {
                 Ok(answer) => {
                     let answer = match answer {
                         Ok(value) => value,
@@ -146,13 +148,12 @@ impl Backend {
                     }
                     return Ok(answer);
                 }
-                Err(mpsc::TryRecvError::Disconnected) => fatal("I/O worker stopped"),
-                Err(mpsc::TryRecvError::Empty) => (),
+                Err(mpsc::RecvTimeoutError::Disconnected) => fatal("I/O worker stopped"),
+                Err(mpsc::RecvTimeoutError::Timeout) => (),
             }
             if boot_ms() >= deadline {
                 fatal("I/O worker timed out");
             }
-            std::thread::sleep(Duration::from_millis(5));
         }
     }
 

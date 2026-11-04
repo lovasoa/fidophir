@@ -5,17 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
-    inputs:
-      source-sha:
-        description: Exact main-history commit to build (used by dependency automation)
-        type: string
-        default: ''
 
 permissions:
   contents: read
 
 env:
-  SOURCE_SHA: ${{ inputs.source-sha || github.sha }}
+  SOURCE_SHA: ${{ github.sha }}
 
 # No concurrency cancellation: every main commit gets its own tested release.
 jobs:
@@ -50,7 +45,7 @@ jobs:
           dnf install -y git rust cargo rustfmt clippy gcc make clang-devel
           pkgconf-pkg-config glib2-devel tpm2-tss-devel systemd-rpm-macros
           rpm-build redhat-rpm-config python3 swtpm tpm2-tools
-          python3-fido2 python3-gobject dbus-daemon nodejs
+          python3-fido2 python3-gobject dbus-daemon
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.SOURCE_SHA }}
@@ -79,7 +74,6 @@ jobs:
         run: |
           cargo fmt --check
           cargo clippy --frozen --all-targets --features integration-tests -- -D warnings
-          node --test tests/dependency-merge.test.cjs
       - name: Run library and independent TPM/desktop integration tests
         run: |
           make test
