@@ -51,18 +51,9 @@ impl Drop for Inner {
 #[derive(Clone)]
 pub struct Backend(Rc<Inner>);
 
-fn fatal(message: &'static str) -> ! {
+fn fatal(message: impl std::fmt::Display) -> ! {
     eprintln!("fidophir: {message}");
     std::process::exit(1)
-}
-
-fn status(error: &Error) -> Status {
-    if let Error::Tpm(tss_esapi::Error::Tss2Error(rc)) = error
-        && rc.kind() == Some(RcKind::Lockout)
-    {
-        return Status::CTAP2_ERR_PIN_AUTH_BLOCKED;
-    }
-    Status::CTAP2_ERR_VENDOR_HARDWARE_FAILURE
 }
 
 impl Backend {
@@ -142,12 +133,20 @@ impl Backend {
                 .busy()
                 .unwrap_or_else(|_| fatal("UHID transport failed"));
             match result.try_recv() {
-                Ok(Err(_)) if durable => fatal("durable state update failed; refusing to continue"),
                 Ok(answer) => {
+                    let answer = match answer {
+                        Ok(value) => value,
+                        Err(Error::Tpm(tss_esapi::Error::Tss2Error(rc)))
+                            if !durable && rc.kind() == Some(RcKind::Lockout) =>
+                        {
+                            return Err(Status::CTAP2_ERR_PIN_AUTH_BLOCKED);
+                        }
+                        Err(error) => fatal(error),
+                    };
                     if !durable && self.0.io.borrow().cancelled() {
                         return Err(Status::CTAP2_ERR_KEEPALIVE_CANCEL);
                     }
-                    return answer.map_err(|e| status(&e));
+                    return Ok(answer);
                 }
                 Err(mpsc::TryRecvError::Disconnected) => fatal("I/O worker stopped"),
                 Err(mpsc::TryRecvError::Empty) => (),
@@ -358,23 +357,21 @@ pub struct VerifyingKey(p256::ecdsa::VerifyingKey);
 pub struct Signature(p256::ecdsa::Signature);
 
 impl opensk::api::crypto::ec_signing::Ecdsa for TpmEcdsa {
-    type Context = Backend;
     type SecretKey = SigningKey;
     type PublicKey = VerifyingKey;
     type Signature = Signature;
 }
 impl opensk::api::crypto::ec_signing::EcSecretKey for SigningKey {
-    type Context = Backend;
     type PublicKey = VerifyingKey;
     type Signature = Signature;
-    fn random(_: &mut impl opensk::api::rng::Rng, backend: &mut Backend) -> CtapResult<Self> {
-        backend.generate().map(Self)
+    fn random(_: &mut impl opensk::api::rng::Rng) -> Self {
+        fatal("credential generation requires the platform key hook")
     }
     fn public_key(&self) -> VerifyingKey {
         VerifyingKey(self.0.verifying_key().expect("validated TPM point"))
     }
-    fn sign(&self, message: &[u8], backend: &mut Backend) -> CtapResult<Signature> {
-        backend.sign(&self.0, message).map(Signature)
+    fn sign(&self, _: &[u8]) -> Signature {
+        fatal("credential signing requires the platform key hook")
     }
     fn export(&self) -> Vec<u8> {
         self.0.encode().expect("bounded TPM blob encoding")
@@ -383,6 +380,16 @@ impl opensk::api::crypto::ec_signing::EcSecretKey for SigningKey {
         let blob = Blob::decode(bytes, Kind::Signing).ok()?;
         blob.verifying_key().ok()?;
         Some(Self(blob))
+    }
+}
+impl SigningKey {
+    pub fn generate(backend: &Backend) -> CtapResult<Self> {
+        backend.generate().map(Self)
+    }
+    pub fn sign_with(&self, backend: &Backend, message: &[u8]) -> CtapResult<Vec<u8>> {
+        backend
+            .sign(&self.0, message)
+            .map(|signature| signature.to_der().as_bytes().to_vec())
     }
 }
 impl opensk::api::crypto::ec_signing::EcPublicKey for VerifyingKey {

@@ -54,10 +54,10 @@ class Pipe(CtapDevice):
     def list_devices(cls):
         return iter(())
 
-    def close(self):
+    def close(self, expected=0):
         if self.proc.stdin:
             self.proc.stdin.close()
-        assert self.proc.wait(timeout=15) == 0
+        assert self.proc.wait(timeout=15) == expected
         self.proc.stdout.close()
 
 
@@ -211,7 +211,7 @@ def main():
                 print("PASS: standard credential-management enumeration",flush=True)
 
                 # Corrupt only the TPM private blob, preserving its public point/template.
-                # A hardware failure must propagate; software signing is never a fallback.
+                # Unexpected hardware failure must stop the process before any signature escapes.
                 record_file = next(f for f in (state / "v1").iterdir()
                                    if 1700 <= int(f.name) < 2000 and cbor.decode(f.read_bytes())[0] == first.credential_id)
                 original = record_file.read_bytes()
@@ -221,10 +221,26 @@ def main():
                 damaged = bytearray(wrapped[2]); damaged[-1] ^= 1; wrapped[2] = bytes(damaged)
                 record[12] = [algorithm,cbor.encode(wrapped)]
                 record_file.write_bytes(cbor.encode(record))
-                expect(0xf3,lambda:sign(ctap,new_pin,first))
+                try:
+                    sign(ctap,new_pin,first)
+                except RuntimeError as error:
+                    assert "Rust test bridge exited" in str(error)
+                else:
+                    raise AssertionError("corrupted hardware key did not stop the service")
+                pipe.close(expected=1); pipe = None
+                # This disposable TCP simulator has no Linux resource manager to
+                # flush the long-lived primary when the daemon's device fd closes.
+                subprocess.run(["tpm2_flushcontext","-T",tcti,"-t"],check=True)
                 record_file.write_bytes(original)
+                pipe = Pipe(args.binary,state,tcti)
+                ctap = Ctap2(pipe)
+                # A token obtained before the crash must not survive restart.
+                digest = os.urandom(32)
+                expect(CtapError.ERR.PIN_AUTH_INVALID,lambda:ctap.get_assertion(
+                    "example.test",digest,[{"id":first.credential_id,"type":"public-key"}],
+                    pin_uv_param=protocol.authenticate(token,digest),pin_uv_protocol=protocol.VERSION))
                 sign(ctap,new_pin,first)
-                print("PASS: TPM key-load error propagates without software signing fallback",flush=True)
+                print("PASS: TPM failure exits with status 1; restart rejects old tokens and signs after fresh PIN",flush=True)
 
                 pipe.close(); pipe = None
                 handles = subprocess.check_output(["tpm2_getcap","-T",tcti,"handles-transient"],text=True)

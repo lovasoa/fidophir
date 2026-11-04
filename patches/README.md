@@ -26,11 +26,15 @@ call sites overlap. Review them by interface:
    context through the existing presence loop, including fresh approval before
    first PIN installation. Existing keepalive and cancellation behavior stays in
    the core. No second CTAP parser or custom prompt machinery is added.
-3. `api/crypto/ec_signing.rs`, `api/private_key.rs`, `env`: make ECDSA generation
-   and signing return `CtapResult`, with an explicit context from Env. Propagate
-   failures through registration, assertion and self-attestation. Software crypto
-   uses unit context; the host uses the TPM backend. Optional upstream CTAP1 call
-   sites are adapted too, although the host does not enable CTAP1.
+3. `env`, `ctap/mod.rs`: add two optional platform hooks for credential creation
+   and signing. Linux overrides them to call the TPM. Their defaults preserve
+   upstream software behavior. Generic crypto traits, private-key helpers, CTAP1,
+   credential management and their fixtures stay unchanged. Unexpected TPM errors
+   stop the service; systemd handles restart. Expected PIN refusals and cancellation
+   still use the engine's normal error responses.
+
+ClientPIN cleanup wraps an unchanged command dispatcher in a separate method,
+so its original match does not need to be reindented in our diff.
 
 The `resident_only` feature adds an early rejection of nonresident registration
 without changing library defaults. The host selects it explicitly. Its counter

@@ -2,143 +2,12 @@
 +++ b/Cargo.toml
 @@ -36,6 +36,7 @@
  optional = true
- 
+
  [features]
 +resident_only = []
  default = ["config_command", "ctap1"]
  config_command = []
  debug_ctap = []
---- a/src/api/crypto/ec_signing.rs
-+++ b/src/api/crypto/ec_signing.rs
-@@ -1,3 +1,4 @@
-+use crate::ctap::status_code::CtapResult;
- // Copyright 2023 Google LLC
- //
- // Licensed under the Apache License, Version 2.0 (the "License");
-@@ -18,7 +19,12 @@
- 
- /// Container for all ECDSA cryptographic material.
- pub trait Ecdsa {
--    type SecretKey: EcSecretKey<PublicKey = Self::PublicKey, Signature = Self::Signature>;
-+    type Context;
-+    type SecretKey: EcSecretKey<
-+            Context = Self::Context,
-+            PublicKey = Self::PublicKey,
-+            Signature = Self::Signature,
-+        >;
-     type PublicKey: EcPublicKey<Signature = Self::Signature>;
-     type Signature: EcSignature;
- }
-@@ -33,17 +39,18 @@
- 
- /// ECDSA signing key.
- pub trait EcSecretKey: Sized {
-+    type Context;
-     type PublicKey: EcPublicKey;
-     type Signature: EcSignature;
- 
-     /// Generates a new random secret key.
--    fn random(rng: &mut impl Rng) -> Self;
-+    fn random(rng: &mut impl Rng, context: &mut Self::Context) -> CtapResult<Self>;
- 
-     /// Computes the corresponding public key for this private key.
-     fn public_key(&self) -> Self::PublicKey;
- 
-     /// Signs the message.
--    fn sign(&self, message: &[u8]) -> Self::Signature;
-+    fn sign(&self, message: &[u8], context: &mut Self::Context) -> CtapResult<Self::Signature>;
- 
-     /// Returns the wrapped signing key.
-     ///
---- a/src/api/crypto/mod.rs
-+++ b/src/api/crypto/mod.rs
-@@ -111,7 +111,7 @@
-     #[test]
-     fn test_ecdsa_secret_key_deterministic_export() {
-         let mut env = TestEnv::default();
--        let key = SoftwareEcdsaSecretKey::random(env.rng());
-+        let key = SoftwareEcdsaSecretKey::random(env.rng(), &mut ()).unwrap();
-         let wrapped1 = key.export();
-         let wrapped2 = key.export();
-         assert_eq!(wrapped1, wrapped2);
-@@ -120,7 +120,7 @@
-     #[test]
-     fn test_ecdsa_secret_key_export_import() {
-         let mut env = TestEnv::default();
--        let first_key = SoftwareEcdsaSecretKey::random(env.rng());
-+        let first_key = SoftwareEcdsaSecretKey::random(env.rng(), &mut ()).unwrap();
-         let wrapped = first_key.export();
-         let second_key = SoftwareEcdsaSecretKey::import(&wrapped).unwrap();
-         let wrapped_again = second_key.export();
-@@ -130,11 +130,11 @@
-     #[test]
-     fn test_ecdsa_signature_deterministic() {
-         let mut env = TestEnv::default();
--        let private_key = SoftwareEcdsaSecretKey::random(env.rng());
-+        let private_key = SoftwareEcdsaSecretKey::random(env.rng(), &mut ()).unwrap();
-         let message = [0x12, 0x34, 0x56, 0x78];
--        let signature1 = private_key.sign(&message);
-+        let signature1 = private_key.sign(&message, &mut ()).unwrap();
-         let der1 = signature1.to_der();
--        let signature2 = private_key.sign(&message);
-+        let signature2 = private_key.sign(&message, &mut ()).unwrap();
-         let der2 = signature2.to_der();
-         assert_eq!(der1, der2);
-     }
---- a/src/api/crypto/rust_crypto.rs
-+++ b/src/api/crypto/rust_crypto.rs
-@@ -1,3 +1,4 @@
-+use crate::ctap::status_code::CtapResult;
- // Copyright 2023 Google LLC
- //
- // Licensed under the Apache License, Version 2.0 (the "License");
-@@ -123,6 +124,7 @@
- }
- 
- impl ec_signing::Ecdsa for SoftwareEcdsa {
-+    type Context = ();
-     type SecretKey = SoftwareEcdsaSecretKey;
-     type PublicKey = SoftwareEcdsaPublicKey;
-     type Signature = SoftwareEcdsaSignature;
-@@ -133,12 +135,13 @@
- }
- 
- impl ec_signing::EcSecretKey for SoftwareEcdsaSecretKey {
-+    type Context = ();
-     type PublicKey = SoftwareEcdsaPublicKey;
-     type Signature = SoftwareEcdsaSignature;
- 
--    fn random(rng: &mut impl Rng) -> Self {
-+    fn random(rng: &mut impl Rng, _: &mut ()) -> CtapResult<Self> {
-         let signing_key = p256::ecdsa::SigningKey::generate_from_rng(rng);
--        SoftwareEcdsaSecretKey { signing_key }
-+        Ok(SoftwareEcdsaSecretKey { signing_key })
-     }
- 
-     fn public_key(&self) -> Self::PublicKey {
-@@ -146,9 +149,9 @@
-         SoftwareEcdsaPublicKey { verifying_key }
-     }
- 
--    fn sign(&self, message: &[u8]) -> Self::Signature {
-+    fn sign(&self, message: &[u8], _: &mut ()) -> CtapResult<Self::Signature> {
-         let signature = self.signing_key.sign(message);
--        SoftwareEcdsaSignature { signature }
-+        Ok(SoftwareEcdsaSignature { signature })
-     }
- 
-     fn export(&self) -> Vec<u8> {
---- a/src/api/key_store.rs
-+++ b/src/api/key_store.rs
-@@ -350,7 +350,7 @@
-         env: &mut TestEnv,
-         signature_algorithm: SignatureAlgorithm,
-     ) -> CredentialSource {
--        let private_key = PrivateKey::new(env, signature_algorithm);
-+        let private_key = PrivateKey::new(env, signature_algorithm).unwrap();
-         CredentialSource {
-             wrapped_private_key: private_key.to_cbor(),
-             rp_id_hash: [0x55; 32],
 --- a/src/api/mod.rs
 +++ b/src/api/mod.rs
 @@ -29,3 +29,5 @@
@@ -147,7 +16,7 @@
  pub mod user_presence;
 +
 +pub mod pin;
---- /dev/null
+--- a/src/api/pin.rs
 +++ b/src/api/pin.rs
 @@ -0,0 +1,11 @@
 +//! Hardware authorization boundary. The protocol still owns PIN parsing and retries.
@@ -161,111 +30,12 @@
 +    fn matches_verified(&self, hash: &[u8; 16]) -> bool;
 +    fn clear(&mut self);
 +}
---- a/src/api/private_key.rs
-+++ b/src/api/private_key.rs
-@@ -55,17 +55,20 @@
-     /// # Panics
-     ///
-     /// Panics if the algorithm is [`SignatureAlgorithm::Unknown`].
--    pub fn new(env: &mut E, alg: SignatureAlgorithm) -> Self {
-+    pub fn new(env: &mut E, alg: SignatureAlgorithm) -> CtapResult<Self> {
-         match alg {
--            SignatureAlgorithm::Es256 => Self::Ecdsa(EcdsaSk::<E>::random(env.rng())),
--            #[cfg(feature = "ed25519")]
--            SignatureAlgorithm::Eddsa => Self::Ed25519(Ed25519Sk::<E>::random(env.rng())),
-+            SignatureAlgorithm::Es256 => {
-+                let (rng, context) = env.rng_and_signing_context();
-+                Ok(Self::Ecdsa(EcdsaSk::<E>::random(rng, context)?))
-+            }
-+            #[cfg(feature = "ed25519")]
-+            SignatureAlgorithm::Eddsa => Ok(Self::Ed25519(Ed25519Sk::<E>::random(env.rng()))),
-             SignatureAlgorithm::Unknown => unreachable!(),
-         }
-     }
- 
-     /// Creates a new ecdsa private key.
--    pub fn new_ecdsa(env: &mut E) -> PrivateKey<E> {
-+    pub fn new_ecdsa(env: &mut E) -> CtapResult<PrivateKey<E>> {
-         Self::new(env, SignatureAlgorithm::Es256)
-     }
- 
-@@ -79,9 +82,9 @@
-     }
- 
-     /// Returns the encoded signature for a given message.
--    pub fn sign_and_encode(&self, message: &[u8]) -> CtapResult<Vec<u8>> {
-+    pub fn sign_and_encode(&self, env: &mut E, message: &[u8]) -> CtapResult<Vec<u8>> {
-         Ok(match self {
--            PrivateKey::Ecdsa(key) => key.sign(message).to_der(),
-+            PrivateKey::Ecdsa(key) => key.sign(message, env.rng_and_signing_context().1)?.to_der(),
-             #[cfg(feature = "ed25519")]
-             PrivateKey::Ed25519(key) => key.sign(message).to_bytes(),
-         })
-@@ -140,7 +143,7 @@
-     #[test]
-     fn test_new_ecdsa_export_import() {
-         let mut env = TestEnv::default();
--        let private_key = PrivateKey::<TestEnv>::new_ecdsa(&mut env);
-+        let private_key = PrivateKey::<TestEnv>::new_ecdsa(&mut env).unwrap();
-         let key_bytes = private_key.export();
-         let ecdsa_key = EcdsaSk::<TestEnv>::import(&key_bytes).unwrap();
-         let reconstructed = PrivateKey::<TestEnv>::Ecdsa(ecdsa_key);
-@@ -151,7 +154,7 @@
-     #[cfg(feature = "ed25519")]
-     fn test_new_ed25519_export_import() {
-         let mut env = TestEnv::default();
--        let private_key = PrivateKey::<TestEnv>::new(&mut env, SignatureAlgorithm::Eddsa);
-+        let private_key = PrivateKey::<TestEnv>::new(&mut env, SignatureAlgorithm::Eddsa).unwrap();
-         let key_bytes = private_key.export();
-         let ed25519_key = Ed25519Sk::<TestEnv>::import(&key_bytes).unwrap();
-         let reconstructed = PrivateKey::<TestEnv>::Ed25519(ed25519_key);
-@@ -161,7 +164,7 @@
-     #[test]
-     fn test_private_key_get_pub_key() {
-         let mut env = TestEnv::default();
--        let ecdsa_key = EcdsaSk::<TestEnv>::random(env.rng());
-+        let ecdsa_key = EcdsaSk::<TestEnv>::random(env.rng(), &mut ()).unwrap();
-         let public_key = ecdsa_key.public_key();
-         let private_key = PrivateKey::<TestEnv>::Ecdsa(ecdsa_key);
-         assert_eq!(
-@@ -174,15 +177,18 @@
-     fn test_private_key_sign_and_encode() {
-         let mut env = TestEnv::default();
-         let message = [0x5A; 32];
--        let ecdsa_key = EcdsaSk::<TestEnv>::random(env.rng());
--        let signature = ecdsa_key.sign(&message).to_der();
-+        let ecdsa_key = EcdsaSk::<TestEnv>::random(env.rng(), &mut ()).unwrap();
-+        let signature = ecdsa_key.sign(&message, &mut ()).unwrap().to_der();
-         let private_key = PrivateKey::<TestEnv>::Ecdsa(ecdsa_key);
--        assert_eq!(private_key.sign_and_encode(&message), Ok(signature));
-+        assert_eq!(
-+            private_key.sign_and_encode(&mut env, &message),
-+            Ok(signature)
-+        );
-     }
- 
-     fn test_private_key_signature_algorithm(signature_algorithm: SignatureAlgorithm) {
-         let mut env = TestEnv::default();
--        let private_key = PrivateKey::<TestEnv>::new(&mut env, signature_algorithm);
-+        let private_key = PrivateKey::<TestEnv>::new(&mut env, signature_algorithm).unwrap();
-         assert_eq!(private_key.signature_algorithm(), signature_algorithm);
-     }
- 
-@@ -199,7 +205,7 @@
- 
-     fn test_private_key_from_to_cbor(signature_algorithm: SignatureAlgorithm) {
-         let mut env = TestEnv::default();
--        let private_key = PrivateKey::<TestEnv>::new(&mut env, signature_algorithm);
-+        let private_key = PrivateKey::<TestEnv>::new(&mut env, signature_algorithm).unwrap();
-         let cbor = private_key.to_cbor();
-         assert!(PrivateKey::<TestEnv>::from_cbor(cbor) == Ok(private_key));
-     }
 --- a/src/api/user_presence.rs
 +++ b/src/api/user_presence.rs
 @@ -28,11 +28,32 @@
- 
+
  pub type UserPresenceWaitResult = CtapResult<(UserPresenceResult, RecvStatus)>;
- 
+
 +#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 +pub enum Operation {
 +    Create,
@@ -293,7 +63,7 @@
      /// Must eventually be followed by a call to [`Self::check_complete`].
 -    fn check_init(&mut self);
 +    fn check_init(&mut self, request: ApprovalRequest<'_>);
- 
+
      /// Waits until user presence is confirmed, rejected, or the given timeout expires.
      ///
 --- a/src/ctap/client_pin.rs
@@ -318,13 +88,13 @@
  #[cfg(test)]
  use enum_iterator::{Sequence, all};
 -use subtle::ConstantTimeEq;
- 
+
  /// The prefix length of the PIN hash that is stored and compared.
  ///
 @@ -84,15 +85,16 @@
      Ok(result)
  }
- 
+
 -/// Stores a hash prefix of the new PIN in the persistent storage, if correct.
 +/// Installs or changes the PIN through the environment's authorization authority.
  ///
@@ -373,7 +143,7 @@
 +    }
      Ok(())
  }
- 
+
 @@ -206,16 +211,19 @@
          shared_secret: &SharedSecret<E>,
          pin_hash_enc: Vec<u8>,
@@ -397,7 +167,7 @@
 +                        .verify(array_ref![hash, 0, PIN_AUTH_LENGTH])?,
 +                    _ => false,
 +                };
- 
+
                  if !is_valid {
                      self.get_mut_pin_protocol(pin_uv_auth_protocol)
 @@ -231,7 +239,7 @@
@@ -420,14 +190,14 @@
 @@ -283,13 +292,13 @@
          let pin_uv_auth_param = ok_or_missing(pin_uv_auth_param)?;
          let new_pin_enc = ok_or_missing(new_pin_enc)?;
- 
+
 -        if env.persist().pin_hash()?.is_some() {
 +        if env.pin_authority().is_set()? {
              return Err(Ctap2StatusCode::CTAP2_ERR_PIN_AUTH_INVALID);
          }
          let shared_secret = self.get_shared_secret(pin_uv_auth_protocol, key_agreement)?;
          shared_secret.verify(&new_pin_enc, &pin_uv_auth_param)?;
- 
+
 -        check_and_store_new_pin(env, &shared_secret, new_pin_enc)?;
 +        check_and_store_new_pin(env, &shared_secret, new_pin_enc, channel)?;
          storage::reset_pin_retries(env)?;
@@ -444,14 +214,14 @@
 @@ -321,9 +331,9 @@
          shared_secret.verify(&auth_param_data, &pin_uv_auth_param)?;
          self.verify_pin_hash_enc(env, pin_uv_auth_protocol, &shared_secret, pin_hash_enc)?;
- 
+
 -        check_and_store_new_pin(env, &shared_secret, new_pin_enc)?;
 +        let result = check_and_store_new_pin(env, &shared_secret, new_pin_enc, channel);
          self.reset_pin_uv_auth_token(env);
 -        Ok(())
 +        result
      }
- 
+
      fn process_get_pin_token(
 @@ -351,6 +361,7 @@
          let shared_secret = self.get_shared_secret(pin_uv_auth_protocol, key_agreement)?;
@@ -460,106 +230,61 @@
 +            env.pin_authority().clear();
              return Err(Ctap2StatusCode::CTAP2_ERR_PIN_INVALID);
          }
- 
+
 @@ -414,6 +425,7 @@
- 
+
          let shared_secret = self.get_shared_secret(pin_uv_auth_protocol, key_agreement)?;
          if env.persist().has_force_pin_change()? {
 +            env.pin_authority().clear();
              return Err(Ctap2StatusCode::CTAP2_ERR_PIN_INVALID);
          }
- 
-@@ -511,39 +523,47 @@
-         client_pin_params: AuthenticatorClientPinParameters,
-         channel: Channel,
-     ) -> CtapResult<ResponseData> {
--        check_pin_uv_auth_protocol(env, client_pin_params.pin_uv_auth_protocol)?;
--        let response = match client_pin_params.sub_command {
--            ClientPinSubCommand::GetPinRetries => Some(self.process_get_pin_retries(env)?),
--            ClientPinSubCommand::GetKeyAgreement => {
--                Some(self.process_get_key_agreement(client_pin_params)?)
--            }
--            ClientPinSubCommand::SetPin => {
--                self.process_set_pin(env, client_pin_params)?;
--                None
--            }
--            ClientPinSubCommand::ChangePin => {
--                self.process_change_pin(env, client_pin_params)?;
--                None
--            }
--            ClientPinSubCommand::GetPinToken => {
--                Some(self.process_get_pin_token(env, client_pin_params)?)
--            }
--            ClientPinSubCommand::GetPinUvAuthTokenUsingUvWithPermissions => Some(
--                self.process_get_pin_uv_auth_token_using_uv_with_permissions(
--                    env,
--                    client_pin_params,
--                    channel,
--                )?,
--            ),
--            ClientPinSubCommand::GetUvRetries => Some(self.process_get_uv_retries(env)?),
--            ClientPinSubCommand::GetPinUvAuthTokenUsingPinWithPermissions => Some(
--                self.process_get_pin_uv_auth_token_using_pin_with_permissions(
--                    env,
--                    client_pin_params,
--                )?,
--            ),
--        };
--        Ok(ResponseData::AuthenticatorClientPin(response))
-+        let result = (|| {
-+            check_pin_uv_auth_protocol(env, client_pin_params.pin_uv_auth_protocol)?;
-+            let response = match client_pin_params.sub_command {
-+                ClientPinSubCommand::GetPinRetries => Some(self.process_get_pin_retries(env)?),
-+                ClientPinSubCommand::GetKeyAgreement => {
-+                    Some(self.process_get_key_agreement(client_pin_params)?)
-+                }
-+                ClientPinSubCommand::SetPin => {
-+                    self.process_set_pin(env, client_pin_params, channel)?;
-+                    None
-+                }
-+                ClientPinSubCommand::ChangePin => {
-+                    self.process_change_pin(env, client_pin_params, channel)?;
-+                    None
-+                }
-+                ClientPinSubCommand::GetPinToken => {
-+                    Some(self.process_get_pin_token(env, client_pin_params)?)
-+                }
-+                ClientPinSubCommand::GetPinUvAuthTokenUsingUvWithPermissions => Some(
-+                    self.process_get_pin_uv_auth_token_using_uv_with_permissions(
-+                        env,
-+                        client_pin_params,
-+                        channel,
-+                    )?,
-+                ),
-+                ClientPinSubCommand::GetUvRetries => Some(self.process_get_uv_retries(env)?),
-+                ClientPinSubCommand::GetPinUvAuthTokenUsingPinWithPermissions => Some(
-+                    self.process_get_pin_uv_auth_token_using_pin_with_permissions(
-+                        env,
-+                        client_pin_params,
-+                    )?,
-+                ),
-+            };
-+            Ok(ResponseData::AuthenticatorClientPin(response))
-+        })();
+
+@@ -506,6 +518,21 @@
+
+     /// Processes the authenticatorClientPin command.
+     pub fn process_command(
++        &mut self,
++        env: &mut E,
++        client_pin_params: AuthenticatorClientPinParameters,
++        channel: Channel,
++    ) -> CtapResult<ResponseData> {
++        let result = self.process_command_inner(env, client_pin_params, channel);
 +        if result.is_err() {
 +            self.reset_pin_uv_auth_token(env);
 +        } else if !self.pin_uv_auth_token_state.is_in_use() {
 +            env.pin_authority().clear();
 +        }
 +        result
-     }
- 
-     /// Verifies the HMAC for the pinUvAuthToken of the given version.
-@@ -572,6 +592,7 @@
++    }
++
++    fn process_command_inner(
+         &mut self,
+         env: &mut E,
+         client_pin_params: AuthenticatorClientPinParameters,
+@@ -518,11 +545,11 @@
+                 Some(self.process_get_key_agreement(client_pin_params)?)
+             }
+             ClientPinSubCommand::SetPin => {
+-                self.process_set_pin(env, client_pin_params)?;
++                self.process_set_pin(env, client_pin_params, channel)?;
+                 None
+             }
+             ClientPinSubCommand::ChangePin => {
+-                self.process_change_pin(env, client_pin_params)?;
++                self.process_change_pin(env, client_pin_params, channel)?;
+                 None
+             }
+             ClientPinSubCommand::GetPinToken => {
+@@ -572,6 +599,7 @@
          self.pin_protocol_v1.reset_pin_uv_auth_token(env);
          self.pin_protocol_v2.reset_pin_uv_auth_token(env);
          self.pin_uv_auth_token_state.stop_using_pin_uv_auth_token();
 +        env.pin_authority().clear();
      }
- 
+
      /// Resets all held state.
-@@ -639,8 +660,12 @@
- 
+@@ -639,8 +667,12 @@
+
      /// Updates the running timers, triggers timeout events.
      pub fn update_timeouts(&mut self, env: &mut E) {
 +        let was_in_use = self.pin_uv_auth_token_state.is_in_use();
@@ -569,21 +294,21 @@
 +            env.pin_authority().clear();
 +        }
      }
- 
+
      /// Returns if user presence is cached for use of the pinUvAuthToken.
-@@ -1132,7 +1157,8 @@
+@@ -1132,7 +1164,8 @@
              Err(Ctap2StatusCode::CTAP2_ERR_PIN_POLICY_VIOLATION)
          );
          assert_eq!(env.persist().has_force_pin_change(), Ok(true));
 -        assert!(client_pin.has_token(&mut env));
 +        // Failed ClientPIN commands revoke cached hardware authorization too.
 +        assert!(!client_pin.has_token(&mut env));
- 
+
          // Changing to a different PIN succeeds, clears force_pin_change, and resets the token.
          let new_pin_enc = encrypt_pin(&shared_secret, b"5678".to_vec());
-@@ -1563,7 +1589,12 @@
+@@ -1563,7 +1596,12 @@
              let new_pin_enc = encrypt_pin(&shared_secret, pin);
- 
+
              assert_eq!(
 -                check_and_store_new_pin(&mut env, &shared_secret, new_pin_enc),
 +                check_and_store_new_pin(
@@ -595,10 +320,10 @@
                  result
              );
              if result.is_ok() {
-@@ -2030,8 +2061,14 @@
+@@ -2030,8 +2068,14 @@
          );
          assert!(client_pin.has_token(&mut env));
- 
+
 +        let clears = env.pin_clears;
          env.clock().advance(30001);
          client_pin.update_timeouts(&mut env);
@@ -610,88 +335,6 @@
          for permission in all::<PinPermission>() {
              assert_eq!(
                  client_pin
---- a/src/ctap/credential_management.rs
-+++ b/src/ctap/credential_management.rs
-@@ -390,7 +390,7 @@
-     const DUMMY_CHANNEL: Channel = Channel::MainHid([0x12, 0x34, 0x56, 0x78]);
- 
-     fn create_credential_source(env: &mut TestEnv) -> PublicKeyCredentialSource {
--        let private_key = PrivateKey::new_ecdsa(env);
-+        let private_key = PrivateKey::new_ecdsa(env).unwrap();
-         PublicKeyCredentialSource {
-             key_type: PublicKeyCredentialType::PublicKey,
-             credential_id: env.rng().gen_uniform_u8x32().to_vec(),
---- a/src/ctap/ctap1.rs
-+++ b/src/ctap/ctap1.rs
-@@ -243,7 +243,9 @@
-         challenge: [u8; 32],
-         application: [u8; 32],
-     ) -> Result<Vec<u8>, Ctap1StatusCode> {
--        let sk = EcdsaSk::<E>::random(env.rng());
-+        let (rng, context) = env.rng_and_signing_context();
-+        let sk = EcdsaSk::<E>::random(rng, context)
-+            .map_err(|_| Ctap1StatusCode::SW_INTERNAL_EXCEPTION)?;
-         let pk = sk.public_key();
-         let private_key = PrivateKey::<E>::Ecdsa(sk);
-         let wrapped_private_key = private_key.to_cbor();
-@@ -289,7 +291,9 @@
- 
-         let attestation_key = EcdsaSk::<E>::import(&wrapped_private_key)
-             .ok_or(Ctap1StatusCode::SW_INTERNAL_EXCEPTION)?;
--        let signature = attestation_key.sign(&signature_data);
-+        let signature = attestation_key
-+            .sign(&signature_data, env.rng_and_signing_context().1)
-+            .map_err(|_| Ctap1StatusCode::SW_INTERNAL_EXCEPTION)?;
- 
-         response.extend(signature.to_der());
-         Ok(response)
-@@ -345,7 +349,7 @@
-         let private_key = PrivateKey::<E>::from_cbor(credential_source.wrapped_private_key)
-             .map_err(|_| Ctap1StatusCode::SW_INTERNAL_EXCEPTION)?;
-         let signature = private_key
--            .sign_and_encode(&signature_data)
-+            .sign_and_encode(env, &signature_data)
-             .map_err(|_| Ctap1StatusCode::SW_INTERNAL_EXCEPTION)?;
- 
-         let mut response = signature_data[application.len()..application.len() + 5].to_vec();
-@@ -406,7 +410,7 @@
- 
-     /// Creates an example wrapped credential and RP ID hash.
-     fn create_wrapped_credential(env: &mut TestEnv) -> (Vec<u8>, [u8; 32]) {
--        let private_key = PrivateKey::new_ecdsa(env);
-+        let private_key = PrivateKey::new_ecdsa(env).unwrap();
-         let wrapped_private_key = private_key.to_cbor();
-         let rp_id_hash = Sha::<TestEnv>::digest(b"example.com");
-         let credential_source = CredentialSource {
-@@ -745,7 +749,7 @@
-             .set(|| panic!("Unexpected user presence check in CTAP1"));
-         let mut ctap_state = CtapState::new(&mut env);
- 
--        let private_key = PrivateKey::new_ecdsa(&mut env);
-+        let private_key = PrivateKey::new_ecdsa(&mut env).unwrap();
-         let wrapped_private_key = private_key.to_cbor();
-         let rp_id_hash = Sha::<TestEnv>::digest(b"example.com");
-         let credential_source = CredentialSource {
---- a/src/ctap/data_formats.rs
-+++ b/src/ctap/data_formats.rs
-@@ -2082,7 +2082,7 @@
-     #[test]
-     fn test_from_cose_key_ecdsa() {
-         let mut env = TestEnv::default();
--        let ecdsa_sk = EcdsaSk::<TestEnv>::random(env.rng());
-+        let ecdsa_sk = EcdsaSk::<TestEnv>::random(env.rng(), &mut ()).unwrap();
-         let ecdsa_pk = ecdsa_sk.public_key();
-         let mut x_bytes = [0u8; EC_FIELD_SIZE];
-         let mut y_bytes = [0u8; EC_FIELD_SIZE];
-@@ -2301,7 +2301,7 @@
-     #[test]
-     fn test_credential_source_cbor_round_trip() {
-         let mut env = TestEnv::default();
--        let private_key = PrivateKey::new_ecdsa(&mut env);
-+        let private_key = PrivateKey::new_ecdsa(&mut env).unwrap();
-         let credential = PublicKeyCredentialSource {
-             key_type: PublicKeyCredentialType::PublicKey,
-             credential_id: env.rng().gen_uniform_u8x32().to_vec(),
 --- a/src/ctap/fingerprint.rs
 +++ b/src/ctap/fingerprint.rs
 @@ -1,3 +1,4 @@
@@ -727,11 +370,11 @@
 +    request: ApprovalRequest<'_>,
 +) -> CtapResult<()> {
      const TIMEOUT_ERROR: Ctap2StatusCode = Ctap2StatusCode::CTAP2_ERR_USER_ACTION_TIMEOUT;
- 
+
 -    env.user_presence().check_init();
 +    env.user_presence().check_init(request);
      let loop_timer = env.clock().make_timer(TOUCH_TIMEOUT_MS);
- 
+
      // We don't use the '?' operator to always reach check_complete(...).
 @@ -773,8 +779,8 @@
          if let Some(auth_param) = &pin_uv_auth_param {
@@ -753,9 +396,9 @@
 +        if !options.rk {
 +            return Err(Ctap2StatusCode::CTAP2_ERR_UNSUPPORTED_OPTION);
 +        }
- 
+
          self.pin_uv_auth_precheck(env, &pin_uv_auth_param, pin_uv_auth_protocol, channel)?;
- 
+
 @@ -916,7 +927,11 @@
                      // Perform this check, so bad actors can't brute force exclude_list
                      // without user interaction.
@@ -771,7 +414,7 @@
                          }
 @@ -927,7 +942,11 @@
          }
- 
+
          if !self.has_valid_up(has_pin_uv_auth_param, options.uv) {
 -            check_user_presence(env, channel)?;
 +            check_user_presence(
@@ -781,42 +424,35 @@
 +            )?;
          }
          self.client_pin.clear_token_flags();
- 
+
 @@ -967,7 +986,7 @@
- 
+
          // We decide on the algorithm early, but delay key creation since it takes time.
          // We rather do that later so all intermediate checks may return faster.
 -        let private_key = PrivateKey::new(env, algorithm);
-+        let private_key = PrivateKey::new(env, algorithm)?;
++        let private_key = env.new_credential_key(algorithm)?;
          let credential_id = if options.rk {
              let random_id = env.rng().gen_uniform_u8x32().to_vec();
              let credential_source = PublicKeyCredentialSource {
-@@ -1059,11 +1078,13 @@
-                 let attestation_key = EcdsaSk::<E>::import(&wrapped_private_key)
-                     .ok_or(Ctap2StatusCode::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?;
-                 (
--                    attestation_key.sign(&signature_data).to_der(),
-+                    attestation_key
-+                        .sign(&signature_data, env.rng_and_signing_context().1)?
-+                        .to_der(),
+@@ -1063,7 +1082,7 @@
                      Some(vec![certificate]),
                  )
              }
 -            None => (private_key.sign_and_encode(&signature_data)?, None),
-+            None => (private_key.sign_and_encode(env, &signature_data)?, None),
++            None => (env.sign_credential(&private_key, &signature_data)?, None),
          };
          let attestation_statement = PackedAttestationStatement {
              alg: algorithm as i64,
-@@ -1146,7 +1167,7 @@
- 
+@@ -1146,7 +1165,7 @@
+
          let mut signature_data = auth_data.clone();
          signature_data.extend(client_data_hash);
 -        let signature = private_key.sign_and_encode(&signature_data)?;
-+        let signature = private_key.sign_and_encode(env, &signature_data)?;
- 
++        let signature = env.sign_credential(&private_key, &signature_data)?;
+
          let cred_desc = PublicKeyCredentialDescriptor {
              key_type: PublicKeyCredentialType::PublicKey,
-@@ -1330,7 +1351,11 @@
+@@ -1330,7 +1349,11 @@
          // This check comes before CTAP2_ERR_NO_CREDENTIALS in CTAP 2.0.
          if options.up {
              if !self.has_valid_up(has_pin_uv_auth_param, options.uv) {
@@ -829,7 +465,7 @@
              }
              self.client_pin.clear_token_flags();
          }
-@@ -1385,10 +1410,7 @@
+@@ -1385,10 +1408,7 @@
          }
          let mut options = vec![
              (String::from("rk"), true),
@@ -841,88 +477,25 @@
              (String::from("up"), true),
              (String::from("pinUvAuthToken"), true),
              (String::from("largeBlobs"), true),
-@@ -1474,7 +1496,7 @@
+@@ -1474,7 +1494,7 @@
          ) {
              return Err(Ctap2StatusCode::CTAP2_ERR_NOT_ALLOWED);
          }
 -        check_user_presence(env, channel)?;
 +        check_user_presence(env, channel, ApprovalRequest::new(Operation::Reset, None))?;
- 
+
          reset(env)?;
          self.client_pin.reset(env);
-@@ -1492,7 +1514,7 @@
+@@ -1492,7 +1512,7 @@
      }
- 
+
      fn process_selection(&self, env: &mut E, channel: Channel) -> CtapResult<ResponseData> {
 -        check_user_presence(env, channel)?;
 +        check_user_presence(env, channel, ApprovalRequest::new(Operation::Select, None))?;
          Ok(ResponseData::AuthenticatorSelection)
      }
- 
-@@ -1811,7 +1833,7 @@
-     #[test]
-     fn test_process_make_credential_credential_excluded() {
-         let mut env = TestEnv::default();
--        let excluded_private_key = PrivateKey::new_ecdsa(&mut env);
-+        let excluded_private_key = PrivateKey::new_ecdsa(&mut env).unwrap();
-         let wrapped_private_key = excluded_private_key.to_cbor();
-         let mut ctap_state = CtapState::<TestEnv>::new(&mut env);
- 
-@@ -2915,7 +2937,7 @@
-         let excluded_credential_source = PublicKeyCredentialSource {
-             key_type: PublicKeyCredentialType::PublicKey,
-             credential_id: excluded_credential_id.clone(),
--            wrapped_private_key: PrivateKey::new_ecdsa(&mut env).to_cbor(),
-+            wrapped_private_key: PrivateKey::new_ecdsa(&mut env).unwrap().to_cbor(),
-             rp_id: String::from("example.com"),
-             user_handle: vec![0x01],
-             user_display_name: None,
-@@ -3121,7 +3143,7 @@
-     #[test]
-     fn test_resident_process_get_assertion_with_cred_protect() {
-         let mut env = TestEnv::default();
--        let private_key = PrivateKey::new_ecdsa(&mut env);
-+        let private_key = PrivateKey::new_ecdsa(&mut env).unwrap();
-         let wrapped_private_key = private_key.to_cbor();
-         let credential_id = env.rng().gen_uniform_u8x32().to_vec();
-         let mut ctap_state = CtapState::<TestEnv>::new(&mut env);
-@@ -3297,7 +3319,7 @@
-     #[test]
-     fn test_process_get_assertion_with_cred_blob() {
-         let mut env = TestEnv::default();
--        let private_key = PrivateKey::new_ecdsa(&mut env);
-+        let private_key = PrivateKey::new_ecdsa(&mut env).unwrap();
-         let wrapped_private_key = private_key.to_cbor();
-         let credential_id = env.rng().gen_uniform_u8x32().to_vec();
-         let mut ctap_state = CtapState::<TestEnv>::new(&mut env);
-@@ -3417,7 +3439,7 @@
-     #[test]
-     fn test_process_get_assertion_with_large_blob_key() {
-         let mut env = TestEnv::default();
--        let private_key = PrivateKey::new_ecdsa(&mut env);
-+        let private_key = PrivateKey::new_ecdsa(&mut env).unwrap();
-         let wrapped_private_key = private_key.to_cbor();
-         let credential_id = env.rng().gen_uniform_u8x32().to_vec();
-         let mut ctap_state = CtapState::<TestEnv>::new(&mut env);
-@@ -3706,7 +3728,7 @@
-     #[test]
-     fn test_process_reset() {
-         let mut env = TestEnv::default();
--        let private_key = PrivateKey::new_ecdsa(&mut env);
-+        let private_key = PrivateKey::new_ecdsa(&mut env).unwrap();
-         let wrapped_private_key = private_key.to_cbor();
-         let mut ctap_state = CtapState::<TestEnv>::new(&mut env);
- 
-@@ -3903,7 +3925,7 @@
-             PinUvAuthProtocol::V1,
-         );
- 
--        let private_key = PrivateKey::new_ecdsa(&mut env);
-+        let private_key = PrivateKey::new_ecdsa(&mut env).unwrap();
-         let wrapped_private_key = private_key.to_cbor();
-         let credential_source = PublicKeyCredentialSource {
-             key_type: PublicKeyCredentialType::PublicKey,
-@@ -3988,7 +4010,11 @@
+
+@@ -3988,7 +4008,11 @@
      fn test_check_user_presence() {
          // This TestEnv always returns successful user_presence checks.
          let mut env = TestEnv::default();
@@ -934,8 +507,8 @@
 +        );
          assert!(response.is_ok());
      }
- 
-@@ -4000,7 +4026,11 @@
+
+@@ -4000,7 +4024,11 @@
              clock.advance(100);
              Err(UserPresenceError::Timeout)
          });
@@ -962,39 +535,33 @@
 -    Ok(env.persist().pin_hash()?.is_some())
 +    Ok(env.pin_authority().is_set()?)
  }
- 
+
  /// Returns whether alwaysUv is enabled.
-@@ -417,7 +418,7 @@
-         rp_id: &str,
-         user_handle: Vec<u8>,
-     ) -> PublicKeyCredentialSource {
--        let private_key = PrivateKey::new_ecdsa(env);
-+        let private_key = PrivateKey::new_ecdsa(env).unwrap();
-         PublicKeyCredentialSource {
-             key_type: PublicKeyCredentialType::PublicKey,
-             credential_id: env.rng().gen_uniform_u8x32().to_vec(),
-@@ -813,7 +814,7 @@
-     #[test]
-     fn test_serialize_deserialize_credential() {
-         let mut env = TestEnv::default();
--        let private_key = PrivateKey::new_ecdsa(&mut env);
-+        let private_key = PrivateKey::new_ecdsa(&mut env).unwrap();
-         let credential = PublicKeyCredentialSource {
-             key_type: PublicKeyCredentialType::PublicKey,
-             credential_id: env.rng().gen_uniform_u8x32().to_vec(),
 --- a/src/env/mod.rs
 +++ b/src/env/mod.rs
-@@ -35,6 +35,8 @@
+@@ -24,9 +24,12 @@
+ use crate::api::fingerprint::Fingerprint;
+ use crate::api::key_store::KeyStore;
+ use crate::api::persist::Persist;
++use crate::api::private_key::PrivateKey;
+ use crate::api::rng::Rng;
+ use crate::api::user_presence::UserPresence;
+ use crate::ctap::Channel;
++use crate::ctap::data_formats::SignatureAlgorithm;
++use crate::ctap::status_code::CtapResult;
+ use alloc::vec::Vec;
+
+ #[cfg(feature = "std")]
+@@ -35,6 +38,7 @@
  pub type AesKey<E> = <<E as Env>::Crypto as Crypto>::Aes256;
  pub type EcdhSk<E> = <<<E as Env>::Crypto as Crypto>::Ecdh as Ecdh>::SecretKey;
  pub type EcdhPk<E> = <<<E as Env>::Crypto as Crypto>::Ecdh as Ecdh>::PublicKey;
-+pub type SigningContext<E> = <<<E as Env>::Crypto as Crypto>::Ecdsa as Ecdsa>::Context;
 +
  pub type EcdsaSk<E> = <<<E as Env>::Crypto as Crypto>::Ecdsa as Ecdsa>::SecretKey;
  pub type EcdsaPk<E> = <<<E as Env>::Crypto as Crypto>::Ecdsa as Ecdsa>::PublicKey;
  pub type EcdsaSignature<E> = <<<E as Env>::Crypto as Crypto>::Ecdsa as Ecdsa>::Signature;
-@@ -50,6 +52,8 @@
- 
+@@ -50,6 +54,8 @@
+
  /// Describes what CTAP needs to function.
  pub trait Env {
 +    type PinAuthority: crate::api::pin::PinAuthority;
@@ -1002,25 +569,29 @@
      type Rng: Rng;
      type UserPresence: UserPresence;
      type Persist: Persist;
-@@ -63,6 +67,9 @@
+@@ -63,6 +69,19 @@
      type Fingerprint: Fingerprint;
- 
+
      fn rng(&mut self) -> &mut Self::Rng;
-+    fn rng_and_signing_context(&mut self) -> (&mut Self::Rng, &mut SigningContext<Self>)
++    /// Optional platform key operations; default implementations preserve software behavior.
++    fn new_credential_key(&mut self, alg: SignatureAlgorithm) -> CtapResult<PrivateKey<Self>>
 +    where
-+        Self: Sized;
++        Self: Sized,
++    {
++        Ok(PrivateKey::new(self, alg))
++    }
++    fn sign_credential(&mut self, key: &PrivateKey<Self>, message: &[u8]) -> CtapResult<Vec<u8>>
++    where
++        Self: Sized,
++    {
++        key.sign_and_encode(message)
++    }
      fn user_presence(&mut self) -> &mut Self::UserPresence;
      fn persist(&mut self) -> &mut Self::Persist;
      fn key_store(&mut self) -> &mut Self::KeyStore;
 --- a/src/env/test/mod.rs
 +++ b/src/env/test/mod.rs
-@@ -38,11 +38,13 @@
- 
- pub struct TestEnv {
-     rng: TestRng,
-+    signing_context: (),
-     user_presence: TestUserPresence,
-     store: Store<BufferStorage>,
+@@ -43,6 +43,7 @@
      customization: TestCustomization,
      clock: TestClock,
      soft_reset: bool,
@@ -1028,14 +599,7 @@
      #[cfg(feature = "fingerprint")]
      fingerprint: TestFingerprint,
  }
-@@ -175,12 +177,14 @@
-         #[cfg(feature = "fingerprint")]
-         let fingerprint = TestFingerprint::default();
-         TestEnv {
-+            signing_context: (),
-             rng,
-             user_presence,
-             store,
+@@ -181,6 +182,7 @@
              customization,
              clock,
              soft_reset: false,
@@ -1043,18 +607,18 @@
              #[cfg(feature = "fingerprint")]
              fingerprint,
          }
-@@ -224,7 +228,7 @@
+@@ -224,7 +226,7 @@
  }
- 
+
  impl UserPresence for TestUserPresence {
 -    fn check_init(&mut self) {}
 +    fn check_init(&mut self, _request: crate::api::user_presence::ApprovalRequest<'_>) {}
      fn wait_with_timeout(
          &mut self,
          _buf: &mut [u8; 64],
-@@ -302,6 +306,10 @@
+@@ -302,6 +304,10 @@
  impl key_store::Helper for TestEnv {}
- 
+
  impl Env for TestEnv {
 +    type PinAuthority = Self;
 +    fn pin_authority(&mut self) -> &mut Self {
@@ -1063,18 +627,7 @@
      type Rng = TestRng;
      type UserPresence = TestUserPresence;
      type Persist = Self;
-@@ -314,6 +322,10 @@
-     #[cfg(feature = "fingerprint")]
-     type Fingerprint = TestFingerprint;
- 
-+    fn rng_and_signing_context(&mut self) -> (&mut Self::Rng, &mut ()) {
-+        (&mut self.rng, &mut self.signing_context)
-+    }
-+
-     fn rng(&mut self) -> &mut Self::Rng {
-         &mut self.rng
-     }
-@@ -386,3 +398,29 @@
+@@ -386,3 +392,29 @@
          assert!(!env.boots_after_soft_reset());
      }
  }
@@ -1108,11 +661,11 @@
 +++ b/src/lib.rs
 @@ -117,7 +117,8 @@
      }
- 
+
      pub fn can_sleep(&mut self) -> bool {
 -        !self.should_wink() && self.state.can_sleep(&mut self.env)
 +        let state_can_sleep = self.state.can_sleep(&mut self.env);
 +        state_can_sleep && !self.should_wink()
      }
- 
+
      #[cfg(feature = "ctap1")]

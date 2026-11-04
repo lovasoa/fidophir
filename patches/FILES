@@ -1,16 +1,8 @@
 Cargo.toml
-src/api/crypto/ec_signing.rs
-src/api/crypto/mod.rs
-src/api/crypto/rust_crypto.rs
-src/api/key_store.rs
 src/api/mod.rs
 src/api/pin.rs
-src/api/private_key.rs
 src/api/user_presence.rs
 src/ctap/client_pin.rs
-src/ctap/credential_management.rs
-src/ctap/ctap1.rs
-src/ctap/data_formats.rs
 src/ctap/fingerprint.rs
 src/ctap/mod.rs
 src/ctap/storage.rs

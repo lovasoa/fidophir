@@ -40,7 +40,7 @@ sequenceDiagram
 | File | Responsibility |
 |---|---|
 | `src/main.rs`, `src/env.rs` | Serialized core loop, fixed profile, environment adapters |
-| `src/backend.rs` | One typed blocking worker, fallible signing, PIN authorization lifetime |
+| `src/backend.rs` | One typed blocking worker, fatal fault handling, PIN authorization lifetime |
 | `src/tpm.rs` | Object templates, scoped ESAPI objects/sessions, create/load/change-auth/sign |
 | `src/state.rs` | Bounded per-record files, exclusive directory lock, durable replacement/unlink |
 | `src/io.rs` | UHID events; upstream HID framing, keepalives and busy replies |
@@ -51,7 +51,7 @@ sequenceDiagram
 OpenSK is pinned to `8c81bc299886deb221beed35e2fe01a822649d67`; the repository references it through the `vendor/OpenSK` Git submodule.
 The build uses only its standalone library and CBOR crate. `make prepare` applies
 our patch into ignored `build/` outputs; the upstream checkout stays unchanged. The patch adds a PIN authority, presence
-context, fallible ECDSA with an explicit backend context, and a resident-only guard.
+context, two platform credential hooks, and a resident-only guard.
 See [patch notes](patches/README.md). Upstream owns CTAP parsing, PIN crypto,
 permissions, token timers, credential management, CBOR and HID fragmentation.
 

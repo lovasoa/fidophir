@@ -26,7 +26,8 @@ No physical TPM, host policy, user groups or website credentials were modified.
   * actual 30-second token expiry and reauthorization;
   * PIN change preserving credential files, new-PIN success and old-PIN rejection
     across process restart, plus standard credential enumeration;
-  * a corrupted TPM private blob returning hardware failure with no software fallback;
+  * a corrupted TPM private blob stopping the process with status 1; restart rejects
+    old tokens and requires fresh PIN authorization before signing;
   * no loaded TPM objects/sessions left after graceful shutdown;
   * successful reuse of an old parent backup with its old PIN (documented limitation);
   * denied approval blocking registration/signing;

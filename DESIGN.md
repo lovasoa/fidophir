@@ -87,18 +87,30 @@ Extend `UserPresence::check_init` with `ApprovalRequest { operation, rp_id }`. O
 
 Keep `wait_with_timeout`, `check_complete` and the engine's existing presence loop: it handles cancellation and busy channels, sends UP_NEEDED keepalives every 100 ms, and times out after 30 seconds. Our adapter runs within that loop. GetNextAssertion belongs to the same RP/challenge operation. [Presence trait](https://github.com/google/OpenSK/blob/8c81bc299886deb221beed35e2fe01a822649d67/libraries/opensk/src/api/user_presence.rs), [Existing loop](https://github.com/google/OpenSK/blob/8c81bc299886deb221beed35e2fe01a822649d67/libraries/opensk/src/ctap/mod.rs)
 
-### C. Fallible signing
+### C. Platform credential hooks and fatal faults
 
-`EcSecretKey::random` and `sign` currently cannot return errors. Make them return a small hardware-crypto error result; propagate it through `api/private_key.rs` and its callers to a CTAP hardware error or cancellation. In this same patch, pass the signing context explicitly, removing the need for thread-local backend lookup or a backend reference in each key. Proposed signatures:
+Keep upstream's crypto traits and `PrivateKey` API unchanged. Add only two optional
+methods to `Env`: `new_credential_key(algorithm)` and
+`sign_credential(key, message)`. Their defaults call the original software helpers.
+The three CTAP2 call sites (creation, self-attestation, assertion) use those hooks;
+Linux overrides them to call its existing backend. Keys contain only opaque TPM
+blobs and public material. No thread-local backend lookup or per-key backend
+reference is needed. Import/export and public-key access remain pure operations.
 
-```text
-EcSecretKey::Context                  # associated with the Ecdsa implementation
-random(rng, &mut Context) -> Result<Self, CryptoError>
-sign(&self, message, &mut Context) -> Result<Signature, CryptoError>
-Env::rng_and_signing_context() -> (&mut Rng, &mut SigningContext)
-```
+Linux's infallible `EcSecretKey::random` and `sign` methods are fail-stop guards:
+reaching one exits with a diagnostic instead of creating a software key or signature.
+They are not used by this CTAP2-only profile. Upstream's software implementation,
+optional CTAP1 and their tests need no adaptations.
 
-The paired Env accessor borrows its two distinct fields together. Linux uses its existing backend as Context; the software test implementation uses unit context and the supplied RNG. `PrivateKey::new` obtains the pair, while `sign_and_encode` now receives Env and passes its context to the key. Import/export and public-key access remain independent of hardware context; a TPM key contains its opaque blobs/public material only. These are implemented local interface changes in the vendored engine, not the unmodified upstream API. It adds no authorization cache or crypto algorithm. Update software implementations to return Ok. No empty signatures or software-key fallback. [Current signing interface](https://github.com/google/OpenSK/blob/8c81bc299886deb221beed35e2fe01a822649d67/libraries/opensk/src/api/crypto/ec_signing.rs)
+An unexpected TPM, storage or worker failure logs a sanitized error and exits with
+status 1. Closing the Linux resource-manager fd releases its transient resources;
+closing UHID removes the virtual device. The existing systemd unit restarts after
+three seconds with the same service account and sandbox, limited to three starts
+per minute. Restart discards PIN grants and tokens, preserves durable retry state,
+and does not repair shared TPM lockout. A disconnected browser operation can fail
+or time out; Firefox's precise UI/retry behavior still needs physical validation.
+Expected incorrect PIN, hardware lockout, presence denial and cancellation remain
+ordinary CTAP refusals. No empty signatures or software credential fallback.
 
 The resident-only guard in §2 is the remaining profile change. A permanent rewrite of ClientPIN, cancellation or credential management would defeat this architecture.
 
@@ -268,7 +280,7 @@ Lock checks are not atomic with signing; suspend/hibernation may preserve secret
 
 | Order | Deliverable | Required evidence |
 |---|---|---|
-| 1 | Three interface patches and resident-only guard | Upstream tests still pass with software test authority; targeted tests cover rejected H, reset/expiry clearing, fallible crypto, SetPIN cancellation and RP context. Report patch size separately from vendor size. |
+| 1 | Three interface patches and resident-only guard | Upstream tests still pass with software test authority; targeted tests cover rejected H, reset/expiry clearing, platform key hooks, SetPIN cancellation and RP context. Report patch size separately from vendor size. |
 | 2 | TPM adapter on disposable swtpm | Protected sessions/exact attributes; correct/wrong PIN and DA lockout; restart; PIN change preserves K; old parent demonstrates rollback limit; no exported scalar or surviving child handle. |
 | 3 | LinuxEnv/record-files/UHID/worker | Independent libfido2 or Python fido2 registers resident ES256, restarts and verifies assertions. Cancel during approval/TPM work releases no result; keepalives continue during durable writes; crash tests cover record creation/replacement/deletion, retry decrements, bundled PIN changes, sync failure, temporary residue, corrupt/oversized records and rejection of a second writer. |
 | 4 | RPM files in Fedora 44 GNOME VM | Check actual UID/capabilities/device ACLs; system bus under sandbox; locked/inactive/wrong owner denial; missing agent and stale callbacks fail; fresh required prompts; SELinux enforcing. Record fingerprint and password behavior separately. |
@@ -276,7 +288,7 @@ Lock checks are not atomic with signing; suspend/hibernation may preserve secret
 
 Use synthetic credentials/accounts until hardware integration is established; tests must not alter global TPM policy. A failed gate does not authorize adding another engine or our own UI.
 
-**Implementation evidence (2026-11-04):** the Rust implementation is in this directory. The patched core passes 346 library tests with --no-default-features --features std --lib and 393 with upstream defaults plus std. The host passes filesystem/HID unit tests and warning-free Clippy. Independent python-fido2 tests against disposable swtpm exercise full upstream CTAPHID framing, ClientPIN v2, TPM-backed registration/signing, hardware DA increment on wrong PIN, persistent retry lockout, token expiry, PIN change/restart, RP binding, credential enumeration and TPM error propagation. Native GIO login1/polkit wire tests use a private D-Bus double, covering rejected sessions/policy results, cancellation and stale callbacks. Old-parent rollback after PIN change is reproduced explicitly. These are simulator/private-bus tests, not physical-browser validation. See `VALIDATION.md` for precise results and remaining checks.
+**Implementation evidence (2026-11-04):** the Rust implementation is in this directory. The patched core passes 346 library tests with --no-default-features --features std --lib and 393 with upstream defaults plus std. The host passes filesystem/HID unit tests and warning-free Clippy. Independent python-fido2 tests against disposable swtpm exercise full upstream CTAPHID framing, ClientPIN v2, TPM-backed registration/signing, hardware DA increment on wrong PIN, persistent retry lockout, token expiry, PIN change/restart, RP binding, credential enumeration and fail-stop handling of unexpected TPM errors. Native GIO login1/polkit wire tests use a private D-Bus double, covering rejected sessions/policy results, cancellation and stale callbacks. Old-parent rollback after PIN change is reproduced explicitly. These are simulator/private-bus tests, not physical-browser validation. See `VALIDATION.md` for precise results and remaining checks.
 
 The three interface changes are delivered as one complete upstream patch because their call sites overlap; there is no TLS backend. Worker jobs use typed in-process closures over a bounded channel rather than a serialized command enum. The source includes a local Fedora RPM recipe, declarative installation files and an offline source bundler. The default workspace sandbox hides the device nodes; outside it, /dev/tpmrm0 is root:tss 0660 and /dev/uhid is root:root 0600. The current user cannot open either device, and noninteractive sudo requires a password; native GNOME, actual udev ACL matching, SELinux runtime behavior and Google/GitHub Firefox acceptance remain pending. No service or account has been installed on the host.
 

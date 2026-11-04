@@ -2,7 +2,7 @@
 use crate::{
     Error, Result,
     approval::Approval,
-    backend::{Backend, TpmEcdsa},
+    backend::{Backend, SigningKey, TpmEcdsa},
     io::{SharedIo, boot_ms, dispatch_desktop},
 };
 use opensk::{
@@ -11,9 +11,10 @@ use opensk::{
         connection::{HidConnection, RecvStatus, UsbEndpoint},
         crypto::{Crypto, rust_crypto::*},
         customization::{CustomizationImpl, DEFAULT_CUSTOMIZATION},
+        private_key::PrivateKey,
     },
     ctap::{
-        data_formats::CredentialProtectionPolicy,
+        data_formats::{CredentialProtectionPolicy, SignatureAlgorithm},
         status_code::{Ctap2StatusCode as Status, CtapResult},
     },
     env::Env,
@@ -163,8 +164,18 @@ impl Env for LinuxEnv {
     fn rng(&mut self) -> &mut HostRng {
         &mut self.rng
     }
-    fn rng_and_signing_context(&mut self) -> (&mut HostRng, &mut Backend) {
-        (&mut self.rng, &mut self.backend)
+    fn new_credential_key(
+        &mut self,
+        algorithm: SignatureAlgorithm,
+    ) -> CtapResult<PrivateKey<Self>> {
+        match algorithm {
+            SignatureAlgorithm::Es256 => SigningKey::generate(&self.backend).map(PrivateKey::Ecdsa),
+            _ => Err(Status::CTAP2_ERR_UNSUPPORTED_ALGORITHM),
+        }
+    }
+    fn sign_credential(&mut self, key: &PrivateKey<Self>, message: &[u8]) -> CtapResult<Vec<u8>> {
+        let PrivateKey::Ecdsa(key) = key;
+        key.sign_with(&self.backend, message)
     }
     fn user_presence(&mut self) -> &mut Approval {
         &mut self.approval
