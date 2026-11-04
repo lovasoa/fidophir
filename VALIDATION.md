@@ -11,13 +11,13 @@ On 4 November 2026, tests on Fedora 44 covered the following:
 - The desktop adapter was tested against simulated login1 and polkit services on a private D-Bus. These tests covered denial, cancellation, unsuitable sessions and late responses; they did not use a real GNOME agent or PAM.
 - An offline source bundle and RPM were built and inspected. The local RPM build did not verify its declared build dependencies in a clean Fedora build environment.
 
-No independent audit, FIDO certification, power-loss qualification or resistance to a privileged attacker has been established. The test run did not change the physical TPM or enroll website credentials.
+No independent audit, FIDO certification, power-loss qualification or resistance to a privileged attacker has been established. The simulator tests did not change the physical TPM or enroll website credentials; the separate physical checks below did.
 
 ## Physical checks on 4 November 2026
 
 On this Fedora 44 GNOME desktop with Firefox 159, a locally built RPM was installed, upgraded, removed and reinstalled. Removal stopped the service, removed its virtual device and restored `/dev/uhid` to root:root mode 0600. State and the service account were retained. The generated hidraw device was owned by the desktop UID, group root, mode 0600 without an extra ACL. An independent FIDO client read its GetInfo response.
 
-The tester successfully set a PIN in Firefox with real desktop approval after the process-subject polkit fix. GetInfo confirmed the PIN was configured and polkit did not restart. Firefox 159 required a temporary Inspector workaround for its hidden PIN panel, and a full browser restart restored discovery after a package upgrade. Website enrollment and sign-in, reboot, multiple users and the remaining checks below are still pending.
+The tester successfully set a PIN in Firefox with real desktop approval after the process-subject polkit fix. GetInfo confirmed the PIN was configured and polkit did not restart. Firefox 159 required a temporary Inspector workaround for its hidden PIN panel, and a full browser restart restored discovery after a package upgrade. The tester also confirmed successful registration and authentication on webauthn.io in Firefox using a disposable test username. Polkit’s restart count stayed unchanged after the fix. A subsequent package upgrade preserved the configured PIN, as confirmed by GetInfo. Reboot, multiple users, Google/GitHub compatibility and the remaining checks below are still pending.
 
 ## Remaining physical acceptance
 
