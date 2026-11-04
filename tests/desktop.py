@@ -15,6 +15,7 @@ import time
 from interop import Pipe, Ctap2, ClientPin, CtapError, expect, register, sign, free_ports
 
 MANAGER = """<node><interface name='org.freedesktop.login1.Manager'>
+<method name='GetSessionByPID'><arg type='u' direction='in'/><arg type='o' direction='out'/></method>
 <method name='ListSessions'><arg type='a(susso)' direction='out'/></method>
 </interface></node>"""
 SESSION = """<node><interface name='org.freedesktop.login1.Session'>
@@ -42,7 +43,7 @@ def serve(address, folder):
     def mode():
         value = (folder / "mode").read_text().strip()
         if value != state["mode"]:
-            state.update(mode=value,locked=False)
+            state.update(mode=value,locked=False,process_moved=False)
         return value
 
     def event(kind, **values):
@@ -57,11 +58,19 @@ def serve(address, folder):
             if current == "ambiguous":
                 rows.append(("two",owner,"synthetic","seat0","/org/freedesktop/login1/session/two"))
             invocation.return_value(GLib.Variant("(a(susso))",(rows,)))
+        elif name == "GetSessionByPID":
+            target = "two" if current == "wrong_process_session" or state.get("process_moved", False) else "one"
+            invocation.return_value(GLib.Variant("(o)",(f"/org/freedesktop/login1/session/{target}",)))
         elif name == "CancelCheckAuthorization":
             event("cancel",id=params.unpack()[0]); invocation.return_value(GLib.Variant("()",()))
         elif name == "CheckAuthorization":
             subject,action,details,flags,nonce = params.unpack()
-            assert subject == ("unix-session",{"session-id":"one"})
+            kind, identity = subject
+            assert kind == "unix-process"
+            assert identity["uid"] == os.geteuid()
+            assert Path(f'/proc/{identity["pid"]}').owner()
+            stat = Path(f'/proc/{identity["pid"]}/stat').read_text()
+            assert identity["start-time"] == int(stat.rsplit(")",1)[1].split()[19])
             assert action == "org.local.fidophir.use"
             event("check",mode=current,flags=flags,id=nonce,details=details)
             extra = {}
@@ -72,6 +81,7 @@ def serve(address, folder):
                 authorized,challenge = current not in ("deny","slow_deny"),False
                 if current == "temporary": extra["polkit.temporary_authorization_id"] = "synthetic"
                 if current == "locks_after": state["locked"] = True
+                if current == "process_moves_after": state["process_moved"] = True
 
             def answer():
                 event("reply",id=nonce,mode=current,flags=flags)
@@ -147,7 +157,7 @@ def main(binary):
             sign(ctap,"12345678",key)
             print("PASS: real GIO login1/polkit wire flow, RP context and successful approval",flush=True)
 
-            for mode in ("silent","retained","temporary","deny","locked","inactive","remote","other_uid","ambiguous","no_agent","locks_after","no_seat","greeter","tty"):
+            for mode in ("silent","retained","temporary","deny","locked","inactive","remote","other_uid","ambiguous","no_agent","locks_after","no_seat","greeter","tty","wrong_process_session","process_moves_after"):
                 (folder / "mode").write_text(mode)
                 expect(CtapError.ERR.OPERATION_DENIED,lambda:register(ctap,"12345678",b"must-not-register"))
                 print(f"PASS: native adapter rejects {mode}",flush=True)

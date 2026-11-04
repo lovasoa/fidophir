@@ -65,6 +65,8 @@ The package starts Fidophir for each logged-in user. Each user has their own PIN
 
 Set the PIN before enrolling with Firefox: Firefox on Linux may not offer to create one during website enrollment. Chrome may offer PIN setup during enrollment, but this flow has not yet been verified with Fidophir. Once set, the same Fidophir PIN works in both browsers.
 
+Firefox 159 on Fedora 44 has a known page-layout issue: the PIN panel can remain hidden after selection. For testing, removing the `hidden` attribute from `#set-change-pin-section` in the page Inspector reveals the form until the page is reloaded. This is a temporary browser workaround, not a verified first-use experience.
+
 ### Add a passkey
 
 1. Sign in to a website and start adding a passkey. For example, open [Google's passkey settings](https://myaccount.google.com/signinoptions/passkeys) and choose **Create a passkey**, or follow [GitHub's passkey instructions](https://docs.github.com/en/authentication/authenticating-with-a-passkey/managing-your-passkeys). You can also add one to a [Microsoft account](https://support.microsoft.com/en-us/accounts-billing/security/create-save-passkey).

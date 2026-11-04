@@ -91,6 +91,68 @@ async fn eligible(connection: &DBusConnection, session: &Session, uid: u32) -> R
         && matches!(text("Type").as_deref(), Some("wayland" | "x11")))
 }
 
+// Bind polkit to a live, unprivileged process in the selected login1 session.
+// Session subjects crash polkit 127; the session leader can be a root GDM worker.
+fn process_start(pid: u32, uid: u32) -> Option<u64> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    let ids = status.lines().find_map(|line| line.strip_prefix("Uid:"))?;
+    if !ids
+        .split_whitespace()
+        .all(|id| id.parse::<u32>() == Ok(uid))
+    {
+        return None;
+    }
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
+}
+
+async fn process_in_session(connection: &DBusConnection, pid: u32, session: &Session) -> bool {
+    call(
+        connection,
+        "org.freedesktop.login1",
+        "/org/freedesktop/login1",
+        "org.freedesktop.login1.Manager",
+        "GetSessionByPID",
+        (pid,).to_variant(),
+        1000,
+    )
+    .await
+    .ok()
+    .and_then(|reply| reply.get::<(ObjectPath,)>())
+    .is_some_and(|(path,)| path == session.path)
+}
+
+async fn session_process(
+    connection: &DBusConnection,
+    uid: u32,
+    session: &Session,
+) -> Result<(u32, u64)> {
+    for entry in std::fs::read_dir("/proc")? {
+        let Ok(entry) = entry else { continue };
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Some(start) = process_start(pid, uid) else {
+            continue;
+        };
+        if process_in_session(connection, pid, session).await
+            && process_start(pid, uid) == Some(start)
+        {
+            return Ok((pid, start));
+        }
+    }
+    Err(Error::Invalid("no user process in desktop session"))
+}
+
 async fn authorize(
     connection: DBusConnection,
     uid: u32,
@@ -125,12 +187,28 @@ async fn authorize(
         }
     }
     let session = selected.ok_or(Error::Invalid("no eligible desktop session"))?;
+    let (pid, start) = session_process(&connection, uid, &session).await?;
     let subject = (
-        "unix-session",
-        HashMap::from([("session-id", session.id.to_variant())]),
+        "unix-process",
+        HashMap::from([
+            ("pid", pid.to_variant()),
+            (
+                "uid",
+                i32::try_from(uid)
+                    .map_err(|_| Error::Invalid("invalid desktop UID"))?
+                    .to_variant(),
+            ),
+            ("start-time", start.to_variant()),
+        ]),
     );
     let details = HashMap::from([("operation", operation), ("rp", rp)]);
     for flags in [0u32, 1u32] {
+        if process_start(pid, uid) != Some(start)
+            || !process_in_session(&connection, pid, &session).await
+            || !eligible(&connection, &session, uid).await?
+        {
+            return Err(Error::Invalid("desktop process changed"));
+        }
         let reply = call(
             &connection,
             POLKIT,
@@ -161,7 +239,10 @@ async fn authorize(
             return Err(Error::Invalid("fresh desktop authorization refused"));
         }
     }
-    if !eligible(&connection, &session, uid).await? {
+    if process_start(pid, uid) != Some(start)
+        || !process_in_session(&connection, pid, &session).await
+        || !eligible(&connection, &session, uid).await?
+    {
         return Err(Error::Invalid("desktop session changed"));
     }
     Ok(())
@@ -287,6 +368,9 @@ impl UserPresence for Approval {
         let task = glib::MainContext::default().spawn_local(async move {
             let answer = authorize(connection, uid, cancellation, operation, rp).await;
             if live.get() {
+                if let Err(error) = &answer {
+                    eprintln!("fidophir: desktop approval failed: {error}");
+                }
                 *output.borrow_mut() = Some(answer);
             }
         });
