@@ -151,7 +151,8 @@ def main():
                 assert info.options["rk"] and info.options["alwaysUv"]
                 assert info.pin_uv_protocols == [2]
                 assert not info.options["clientPin"]
-                pin, new_pin = "12345678", "87654321"
+                assert info.min_pin_length == 4
+                pin, new_pin = "1234", "8765"
                 ClientPin(ctap).set_pin(pin)
                 assert ctap.get_info().options["clientPin"]
                 print("PASS: native ClientPIN v2 setup", flush=True)

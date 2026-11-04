@@ -42,7 +42,9 @@ See [design](DESIGN.md) for the security boundaries and implementation.
 
 ## Install for testing
 
-Installation requires administrator access. The package configures and starts Fidophir automatically for each logged-in user. On Fedora 44:
+You need a computer with a TPM, a local graphical desktop session, and administrator access to install the package. Use a disposable account while testing: browser and website compatibility on physical hardware is still being verified.
+
+On Fedora 44:
 
 ```sh
 wget https://github.com/lovasoa/fidophir/releases/latest/download/fidophir.rpm
@@ -56,11 +58,63 @@ wget https://github.com/lovasoa/fidophir/releases/latest/download/fidophir.deb
 sudo apt install ./fidophir.deb
 ```
 
-Each user gets a separate authenticator, PIN and set of passkeys. Access is restricted to that user's account; desktop approval requires a local, active, unlocked graphical session. No owner configuration, group changes or logout is needed.
+The package starts Fidophir for each logged-in user. Each user has their own PIN and passkeys; no logout or account configuration is needed.
 
-Complete the [physical acceptance checklist](VALIDATION.md#physical-acceptance-not-yet-run) before relying on Fidophir; use disposable accounts during testing. Open `about:webauthn` in Firefox to set the Fidophir PIN, then use a website's passkey setup. This PIN is separate from your desktop login password; the desktop approval may also ask for your login password or fingerprint. If startup fails, inspect `journalctl -u "fidophir@$(id -u).service"`.
+### Set your PIN
 
-Stopping or removing the service preserves `/var/lib/fidophir-users` and legacy `/var/lib/fidophir`. There is no automatic reset or migration tool. If you lose the PIN, an administrator must stop the service and remove its local state before starting over; this removes all local Fidophir passkeys. Use each website's recovery method to enroll new passkeys. Debian package and build details are in [packaging](packaging/README.md).
+1. In Firefox, open `about:webauthn` and choose the option to set a security key PIN. Approve the desktop prompt if asked.
+2. Choose a PIN of at least four characters. It is separate from your desktop login password.
+
+Set the PIN before enrolling with Firefox: Firefox on Linux may not offer to create one during website enrollment. Chrome may offer PIN setup during enrollment, but this flow has not yet been verified with Fidophir. Once set, the same Fidophir PIN works in both browsers.
+
+### Add a passkey
+
+1. Sign in to a website and start adding a passkey. For example, open [Google's passkey settings](https://myaccount.google.com/signinoptions/passkeys) and choose **Create a passkey**, or follow [GitHub's passkey instructions](https://docs.github.com/en/authentication/authenticating-with-a-passkey/managing-your-passkeys). You can also add one to a [Microsoft account](https://support.microsoft.com/en-us/accounts-billing/security/create-save-passkey).
+2. When asked where to save it, choose a **security key**. You may need to select **Use another device** or **Save another way** first. Fidophir appears to the browser as a security key; there is no physical key to plug in.
+3. Enter your Fidophir PIN and approve the desktop prompt. The desktop may ask for your login password or fingerprint. Follow the website's remaining prompts to finish.
+4. Next time you sign in, choose the passkey or security key option and follow the PIN and approval prompts.
+
+Keep another sign-in or recovery method for each account. Fidophir passkeys stay on this computer and cannot be moved to another one. If you forget the PIN, resetting Fidophir removes its local passkeys, so you will need your recovery methods to enroll again.
+
+### Troubleshooting
+
+- **No security key appears:** Make sure your desktop session is local, active and unlocked. Check the service status with `systemctl status "fidophir@$(id -u).service"`.
+- **The service fails to start:** Read its error messages with `journalctl -u "fidophir@$(id -u).service" -b`. Check that the computer has a working TPM and that `/dev/tpmrm0` and `/dev/uhid` exist.
+- **No approval prompt appears:** Unlock the screen and make sure your desktop can show authentication prompts, then retry.
+- **Enrollment fails or asks for a PIN:** Set the PIN in Firefox's `about:webauthn`, select the security key option, and retry. Browser and website compatibility is still being tested.
+- **Forgotten or blocked PIN:** Follow the reset steps below. Avoid repeated guesses, which can also lock the TPM temporarily.
+
+### Reset a forgotten or blocked PIN
+
+Resetting deletes **all your Fidophir passkeys** on this computer. You will need another sign-in or recovery method for each website, then add new passkeys. Other users' Fidophir passkeys are unaffected.
+
+1. Open a terminal in your own desktop account and check where your state is stored:
+
+   ```sh
+   systemctl show "fidophir@$(id -u).service" --property=StateDirectory --value
+   ```
+
+2. If the output is `fidophir-users/` followed by your user ID, stop the service and delete your state:
+
+   ```sh
+   sudo systemctl stop "fidophir@$(id -u).service" && sudo rm -rf -- "/var/lib/fidophir-users/$(id -u)/v1"
+   ```
+
+   If the output is `fidophir`, you have a legacy installation. Use this command instead:
+
+   ```sh
+   sudo systemctl stop "fidophir@$(id -u).service" && sudo rm -rf -- /var/lib/fidophir/v1
+   ```
+
+   If the output is different, do not delete anything: your service has a custom state location. Check its configuration first.
+
+3. Start the service again, then set a new PIN and add passkeys as described above:
+
+   ```sh
+   sudo systemctl start "fidophir@$(id -u).service"
+   ```
+
+If the TPM itself is locked, resetting Fidophir does not clear that lockout. Check the service journal as described above and wait for the TPM lockout to clear before trying again.
 
 ## Build and test
 

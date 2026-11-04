@@ -29,9 +29,9 @@ case "$phase" in
         ;;
     activate)
         [ -d /run/systemd/system ] || exit 0
-        modprobe uhid || true
-        udevadm control --reload-rules || true
-        udevadm trigger --settle --action=change --subsystem-match=misc --sysname-match=uhid || true
+        modprobe uhid || { [ -e /dev/uhid ] || echo 'fidophir: could not load UHID; check kernel support and /dev/uhid' >&2; }
+        udevadm control --reload-rules || echo 'fidophir: could not reload device rules' >&2
+        udevadm trigger --settle --action=change --subsystem-match=misc --sysname-match=uhid || echo 'fidophir: could not refresh UHID device permissions' >&2
         # Respect a masked/stopped target and Debian's policy-rc.d decision.
         systemctl --quiet is-active fidophir.target || exit 0
         # deb-systemd-invoke refuses dependency-driven template instances, so
@@ -46,7 +46,7 @@ case "$phase" in
         for unit in $(systemctl list-units --type=service --state=running --no-legend --plain 'user@*.service' | awk '{print $1}'); do
             uid=${unit#user@}; uid=${uid%.service}
             case "$uid" in ''|0|*[!0-9]*) continue ;; esac
-            systemctl start "fidophir@$uid.service" || true
+            systemctl start "fidophir@$uid.service" || echo "fidophir: failed to start fidophir@$uid.service; check systemctl status and journalctl for that service" >&2
         done
         ;;
     *) exit 1 ;;

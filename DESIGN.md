@@ -11,7 +11,7 @@ Fidophir is an experimental Linux host for the [OpenSK](https://github.com/googl
 - [The OpenSK patch](patches/README.md) adds the hooks needed for TPM-backed PIN verification and signing.
 - [Packaging](packaging/README.md) provides the service, permissions and build recipes.
 
-The production profile supports discoverable ES256 passkeys only, with a limit of 300, a minimum PIN length of eight Unicode code points, ClientPIN v2, and required user verification. It uses a zero signature counter, zero AAGUID and self-attestation. It does not support CTAP1, non-discoverable credentials, TPM migration or sync. Compatibility with particular browsers and websites remains to be tested.
+The production profile supports discoverable ES256 passkeys only, with a limit of 300, a minimum PIN length of four Unicode code points, ClientPIN v2, and required user verification. It uses a zero signature counter, zero AAGUID and self-attestation. It does not support CTAP1, non-discoverable credentials, TPM migration or sync. Compatibility with particular browsers and websites remains to be tested.
 
 ## Security boundaries
 

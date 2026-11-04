@@ -232,7 +232,7 @@ impl Persist for Backend {
         Ok(self.is_set()?.then_some([0; 16]))
     }
     fn set_pin(&mut self, hash: &[u8; 16], length: u8) -> CtapResult<()> {
-        if !(8..=63).contains(&length) {
+        if !(4..=63).contains(&length) {
             return Err(Status::CTAP2_ERR_PIN_POLICY_VIOLATION);
         }
         let new = Secret::from_exposed_secret(*hash);

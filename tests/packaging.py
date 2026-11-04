@@ -21,13 +21,15 @@ if name == 'systemctl' and 'list-units' in args:
         print(f'user@{uid}.service loaded active running User manager')
 if name == 'systemctl' and 'is-active' in args:
     sys.exit(3 if os.environ.get('TARGET_STOPPED') else 0)
+if name == 'systemctl' and args == ['start', 'fidophir@1000.service'] and os.environ.get('START_FAIL'):
+    sys.exit(1)
 if name == 'policy-rc.d' and os.environ.get('POLICY_DENY'):
     sys.exit(101)
 '''
 
 
 class Installation(unittest.TestCase):
-    def invoke(self, phase='activate', live=True, legacy=None, override=None, expected=0, **settings):
+    def invoke(self, phase='activate', live=True, legacy=None, override=None, expected=0, stderr_contains=None, **settings):
         with tempfile.TemporaryDirectory() as temporary:
             folder = Path(temporary)
             tools, config, units = folder / 'bin', folder / 'owner', folder / 'units'
@@ -53,6 +55,8 @@ class Installation(unittest.TestCase):
             env = dict(os.environ, PATH=f'{tools}:/usr/bin:/bin', CALLS=str(calls), **settings)
             result = subprocess.run(['sh', str(script), phase, 'deb-systemd-invoke'], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, expected, result.stderr)
+            if stderr_contains is not None:
+                self.assertIn(stderr_contains, result.stderr)
             files = {str(p.relative_to(units)): p.read_text() for p in units.rglob('*.conf')}
             return [json.loads(line) for line in calls.read_text().splitlines()], files
 
@@ -68,6 +72,10 @@ class Installation(unittest.TestCase):
     def test_stopped_target_prevents_activation(self):
         calls, _ = self.invoke(TARGET_STOPPED='yes')
         self.assertFalse(any('start' in c for c in calls))
+
+    def test_start_failure_is_reported_and_other_users_are_started(self):
+        calls, _ = self.invoke(START_FAIL='yes', stderr_contains='failed to start fidophir@1000.service')
+        self.assertIn(['systemctl', 'start', 'fidophir@1001.service'], calls)
 
     def test_chroot_does_not_touch_host(self):
         calls, _ = self.invoke(live=False)

@@ -207,7 +207,7 @@ impl ParentRecord {
         let length = length
             .extract_unsigned()
             .ok_or(Error::Invalid("invalid PIN length"))?;
-        if version.extract_unsigned() != Some(1) || !(8..=63).contains(&length) {
+        if version.extract_unsigned() != Some(1) || !(4..=63).contains(&length) {
             return Err(Error::Invalid("invalid PIN metadata"));
         }
         Ok(Self {

@@ -134,7 +134,7 @@ impl LinuxEnv {
         let profile = CustomizationImpl {
             allows_pin_protocol_v1: false,
             enforce_always_uv: true,
-            default_min_pin_length: 8,
+            default_min_pin_length: 4,
             max_supported_resident_keys: opensk::api::persist::keys::CREDENTIALS.len(),
             use_signature_counter: false,
             default_cred_protect: Some(CredentialProtectionPolicy::UserVerificationRequired),
