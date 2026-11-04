@@ -155,6 +155,10 @@ def main(binary):
             ClientPin(ctap).set_pin("12345678")
             key = register(ctap,"12345678",b"native-adapter")
             sign(ctap,"12345678",key)
+            events = [json.loads(line) for line in (folder / "events").read_text().splitlines()]
+            assert any(e["kind"] == "check" and e["details"]["operation"] == "set up your security key PIN" for e in events)
+            assert any(e["kind"] == "check" and e["details"]["operation"] == "create a passkey" for e in events)
+            assert any(e["kind"] == "check" and e["details"]["operation"] == "sign in" for e in events)
             print("PASS: real GIO login1/polkit wire flow, RP context and successful approval",flush=True)
 
             for mode in ("silent","retained","temporary","deny","locked","inactive","remote","other_uid","ambiguous","no_agent","locks_after","no_seat","greeter","tty","wrong_process_session","process_moves_after"):

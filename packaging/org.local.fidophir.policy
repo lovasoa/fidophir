@@ -5,8 +5,8 @@
 <policyconfig>
   <vendor>Fidophir</vendor>
   <action id="org.local.fidophir.use">
-    <description>Approve use of the TPM passkey authenticator</description>
-    <message>Authenticate to $(operation)$(rp) with your TPM passkey</message>
+    <description>Approve use of Fidophir</description>
+    <message>Fidophir needs your approval to $(operation)$(rp).</message>
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>no</allow_inactive>

@@ -1,6 +1,6 @@
 # Validation
 
-**Physical acceptance has not been completed.** Simulator tests do not show that Fidophir works with a real TPM, Firefox, GNOME or a particular website. Keep an independent account recovery method and use disposable accounts for testing.
+**Physical acceptance is partially complete.** Simulator tests do not show that Fidophir works with a real TPM, Firefox, GNOME or a particular website. Keep an independent account recovery method and use disposable accounts for testing.
 
 ## Evidence so far
 
@@ -13,7 +13,13 @@ On 4 November 2026, tests on Fedora 44 covered the following:
 
 No independent audit, FIDO certification, power-loss qualification or resistance to a privileged attacker has been established. The test run did not change the physical TPM or enroll website credentials.
 
-## Physical acceptance (not yet run)
+## Physical checks on 4 November 2026
+
+On this Fedora 44 GNOME desktop with Firefox 159, a locally built RPM was installed, upgraded, removed and reinstalled. Removal stopped the service, removed its virtual device and restored `/dev/uhid` to root:root mode 0600. State and the service account were retained. The generated hidraw device was owned by the desktop UID, group root, mode 0600 without an extra ACL. An independent FIDO client read its GetInfo response.
+
+The tester successfully set a PIN in Firefox with real desktop approval after the process-subject polkit fix. GetInfo confirmed the PIN was configured and polkit did not restart. Firefox 159 required a temporary Inspector workaround for its hidden PIN panel, and a full browser restart restored discovery after a package upgrade. Website enrollment and sign-in, reboot, multiple users and the remaining checks below are still pending.
+
+## Remaining physical acceptance
 
 A tester with administrator access should perform these checks on a Fedora 44 GNOME test machine before treating Fidophir as a usable authenticator. Record the package, TPM, Firefox and operating system versions and the results. Keep existing recovery credentials. Do not reset or deliberately lock out a TPM that holds valuable keys.
 

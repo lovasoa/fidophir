@@ -15,7 +15,7 @@ use opensk::{
     },
     ctap::{
         command::Command,
-        data_formats::{CredentialProtectionPolicy, SignatureAlgorithm},
+        data_formats::{ClientPinSubCommand, CredentialProtectionPolicy, SignatureAlgorithm},
         status_code::{Ctap2StatusCode as Status, CtapResult},
     },
     env::Env,
@@ -180,9 +180,13 @@ impl Env for LinuxEnv {
                 ("create a passkey", Some(p.rp.rp_id.as_str()))
             }
             Command::AuthenticatorGetAssertion(p) => ("sign in", Some(p.rp_id.as_str())),
-            Command::AuthenticatorClientPin(_) => ("initialize the authenticator PIN", None),
-            Command::AuthenticatorSelection => ("select the authenticator", None),
-            Command::AuthenticatorReset => ("reset the authenticator", None),
+            Command::AuthenticatorClientPin(p) => match p.sub_command {
+                ClientPinSubCommand::SetPin => ("set up your security key PIN", None),
+                ClientPinSubCommand::ChangePin => ("change your security key PIN", None),
+                _ => return None,
+            },
+            Command::AuthenticatorSelection => ("use your security key", None),
+            Command::AuthenticatorReset => ("delete all your Fidophir passkeys", None),
             _ => return None,
         };
         self.approval.set_context(Some(operation), rp);
