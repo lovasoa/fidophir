@@ -60,7 +60,7 @@ The package starts Fidophir for each logged-in user. Each user has their own PIN
 
 ### Set your PIN
 
-1. In Firefox, open `about:webauthn` and choose the option to set a security key PIN. Approve the desktop prompt if asked.
+1. In Firefox, open `about:webauthn` and select the **PIN** tab in the sidebar (separate from device information). Approve the desktop prompt if asked.
 2. Choose a PIN of at least four characters. It is separate from your desktop login password.
 
 Set the PIN before enrolling with Firefox: Firefox on Linux may not offer to create one during website enrollment. Chrome may offer PIN setup during enrollment, but this flow has not yet been verified with Fidophir. Once set, the same Fidophir PIN works in both browsers.

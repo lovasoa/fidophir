@@ -62,6 +62,10 @@ fi
 
 %postun
 %systemd_postun_with_restart fidophir.target
+if [ "$1" -eq 0 ] && [ -d /run/systemd/system ]; then
+    udevadm control --reload-rules || :
+    udevadm trigger --settle --action=change --subsystem-match=misc --sysname-match=uhid || :
+fi
 
 %files
 %{_libexecdir}/fidophir

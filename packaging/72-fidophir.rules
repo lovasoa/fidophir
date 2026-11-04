@@ -7,4 +7,4 @@ SUBSYSTEM=="misc", KERNEL=="uhid", OWNER="root", GROUP="fidophir", MODE="0660", 
 # Its unique ID is the user's numeric UID. Never grant access via uaccess:
 # ACL revocation at logout cannot revoke an already-open hidraw descriptor.
 SUBSYSTEM=="hidraw", KERNELS=="0006:0000:0001.*", IMPORT{parent}="HID_*"
-SUBSYSTEM=="hidraw", KERNELS=="0006:0000:0001.*", ATTRS{phys}=="fidophir-v2", ENV{HID_UNIQ}=="?*", OWNER:="$env{HID_UNIQ}", GROUP:="root", MODE:="0600", TAG-="uaccess"
+SUBSYSTEM=="hidraw", KERNELS=="0006:0000:0001.*", ENV{HID_PHYS}=="fidophir-v2", ENV{HID_UNIQ}=="?*", OWNER:="$env{HID_UNIQ}", GROUP:="root", MODE:="0600", TAG-="uaccess"
