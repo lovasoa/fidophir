@@ -20,14 +20,16 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     name = "fidophir-" + tomllib.loads((root / "Cargo.toml").read_text())["package"]["version"]
+    subprocess.run(["sh", str(root / "tools/prepare-opensk.sh")], check=True)
     with tempfile.TemporaryDirectory(prefix="fidophir-bundle-") as temporary:
         stage = Path(temporary) / name
         shutil.copytree(root, stage, ignore=shutil.ignore_patterns(
-            "target", "dist", ".cargo-home", "__pycache__", "*.pyc", ".git"))
+            "target", "dist", ".cargo-home", "__pycache__", "*.pyc", ".git", "vendor", "rpmbuild", "artifacts"))
+        (stage / "BUNDLED-SOURCES").write_text("OpenSK 8c81bc299886deb221beed35e2fe01a822649d67 + patches/opensk.patch\n")
         crates = stage / "vendor" / "crates"
         subprocess.run(["cargo", "vendor", "--frozen", "--versioned-dirs",
                         "--manifest-path", str(stage / "Cargo.toml"),
-                        "--sync", str(stage / "vendor/opensk/Cargo.toml"), str(crates)],
+                        "--sync", str(stage / "build/opensk/Cargo.toml"), str(crates)],
                        check=True, stdout=subprocess.DEVNULL)
         (stage / ".cargo").mkdir(exist_ok=True)
         (stage / ".cargo/config.toml").write_text(
@@ -47,7 +49,7 @@ def main():
         for crate in ["opensk","cbor"]:
             target = licenses / crate
             target.mkdir(parents=True)
-            shutil.copyfile(stage / "vendor" / crate / "LICENSE",target / "LICENSE")
+            shutil.copyfile(stage / "build" / crate / "LICENSE",target / "LICENSE")
         (stage / "DEPENDENCIES.tsv").write_text("\n".join(inventory)+"\n")
         hashes = []
         for path in sorted(stage.rglob("*")):

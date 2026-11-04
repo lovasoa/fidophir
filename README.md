@@ -41,8 +41,9 @@ sequenceDiagram
 | `patches/opensk.patch` | Complete diff against pinned upstream OpenSK |
 | `packaging/` | Unit, policy, device permissions, service accounts, local RPM recipe |
 
-OpenSK is pinned to `8c81bc299886deb221beed35e2fe01a822649d67`; only its standalone
-library and CBOR crate are included. The patch adds a PIN authority, presence
+OpenSK is pinned to `8c81bc299886deb221beed35e2fe01a822649d67`; the repository references it through the `vendor/OpenSK` Git submodule.
+The build uses only its standalone library and CBOR crate. `make prepare` applies
+our patch into ignored `build/` outputs; the upstream checkout stays unchanged. The patch adds a PIN authority, presence
 context, fallible ECDSA with an explicit backend context, and a resident-only guard.
 See [patch notes](patches/README.md). Upstream owns CTAP parsing, PIN crypto,
 permissions, token timers, credential management, CBOR and HID fragmentation.
@@ -117,9 +118,18 @@ make build
 make test
 ```
 
-Builds are `--frozen` (locked and offline). The ordinary development tree first
-needs `cargo fetch --locked` and a fetch for `vendor/opensk/Cargo.toml` for its
-tests. To make an offline source release from populated Cargo caches:
+Builds are `--frozen` (locked and offline). For a Git checkout, initialize the one upstream submodule and prepare the patched
+build sources before fetching dependencies (nested OpenSK submodules are unused):
+
+```sh
+git submodule update --init
+make prepare
+cargo fetch --locked
+cargo fetch --locked --manifest-path build/opensk/Cargo.toml
+```
+
+Offline release bundles include the prepared library snapshot and need no submodule
+checkout. `locks/opensk.Cargo.lock` pins the engine test dependencies. To make an offline source release from populated Cargo caches:
 
 ```sh
 python3 tools/source_bundle.py --output dist

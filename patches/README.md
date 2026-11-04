@@ -4,13 +4,15 @@ Upstream: https://github.com/google/OpenSK
 
 Commit: `8c81bc299886deb221beed35e2fe01a822649d67`
 
-Base directory: `libraries/opensk`. `vendor/cbor` is the unmodified sibling crate
+Base directory: `libraries/opensk`. `vendor/OpenSK` is a pinned Git submodule; `build/cbor` is its unmodified sibling crate
 from the same commit. Apache-2.0 licenses are retained. No embedded kernel is included.
 
 `opensk.patch` is the complete integration diff, including test adaptations.
 `FILES` lists affected files. Apply with `patch -p1` inside a fresh copy of the
-upstream standalone library; compare the result with `vendor/opensk`.
-Generated Cargo lockfiles are separate build inputs, not part of that diff.
+upstream standalone library; compare the result with `build/opensk` after `make prepare`.
+The build creates those ignored outputs from the submodule and never changes the
+upstream checkout. No copied third-party implementation is tracked in this repository.
+The engine lockfile in `locks/opensk.Cargo.lock` is a separate build input, not part of that diff.
 
 The planned three interface changes are combined into one patch because their
 call sites overlap. Review them by interface:

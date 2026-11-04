@@ -1,18 +1,22 @@
 CARGO ?= cargo
+.DEFAULT_GOAL := build
 TARGET_DIR ?= target
 BINARY ?= $(TARGET_DIR)/release/fidophir
 DESTDIR ?=
 PREFIX ?= /usr
 
-.PHONY: build test integration install
-build:
+.PHONY: prepare build test integration install
+prepare:
+	sh tools/prepare-opensk.sh
+
+build: prepare
 	$(CARGO) build --frozen --release --bin fidophir --target-dir $(TARGET_DIR)
 
-test:
+test: prepare
 	$(CARGO) test --frozen --lib --target-dir $(TARGET_DIR)
-	$(CARGO) test --frozen --manifest-path vendor/opensk/Cargo.toml --no-default-features --features std --lib --target-dir $(TARGET_DIR)
+	$(CARGO) test --frozen --manifest-path build/opensk/Cargo.toml --no-default-features --features std --lib --target-dir $(TARGET_DIR)
 
-integration:
+integration: prepare
 	$(CARGO) build --frozen --bin fidophir-integration --features integration-tests --target-dir $(TARGET_DIR)
 	python3 tests/interop.py --binary $(abspath $(TARGET_DIR))/debug/fidophir-integration --expiry
 	python3 tests/desktop.py --binary $(abspath $(TARGET_DIR))/debug/fidophir-integration
@@ -30,4 +34,4 @@ install:
 	install -Dm644 -t $(DESTDIR)$(PREFIX)/share/doc/fidophir README.md DESIGN.md VALIDATION.md
 	install -Dm644 -t $(DESTDIR)$(PREFIX)/share/doc/fidophir/patches patches/README.md patches/FILES patches/opensk.patch
 	install -Dm644 packaging/README.md $(DESTDIR)$(PREFIX)/share/doc/fidophir/packaging/README.md
-	install -Dm644 LICENSE $(DESTDIR)$(PREFIX)/share/licenses/fidophir/LICENSE
+	install -Dm644 -t $(DESTDIR)$(PREFIX)/share/licenses/fidophir LICENSE LICENSE-APACHE

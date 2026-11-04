@@ -9,8 +9,8 @@ rust-version = "1.92"
 integration-tests = ["opensk/std"]
 
 [dependencies]
-opensk = { path = "vendor/opensk", default-features = false, features = ["software_crypto", "resident_only"] }
-sk-cbor = { path = "vendor/cbor" }
+opensk = { path = "build/opensk", default-features = false, features = ["software_crypto", "resident_only"] }
+sk-cbor = { path = "build/cbor" }
 glib = { version = "=0.22.10", features = ["v2_66"] }
 gio = "=0.22.10"
 nix = { version = "=0.31.3", features = ["fs", "time", "process", "user"] }
