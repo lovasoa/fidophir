@@ -161,6 +161,19 @@ def main():
                 assert counter and int(counter[1],0) >= 1, "wrong PIN did not reach TPM DA protection"
                 print("PASS: incorrect PIN rejected by hardware authorization; DA counter increased", flush=True)
 
+                # The public configured-PIN marker is all zeroes; submitting it
+                # must still reach TPM authorization and consume a hardware retry.
+                client = ClientPin(ctap)
+                agreement, secret = client._get_shared_secret()
+                expect(CtapError.ERR.PIN_INVALID,lambda:ctap.client_pin(
+                    client.protocol.VERSION,ClientPin.CMD.GET_TOKEN_USING_PIN,
+                    key_agreement=agreement,pin_hash_enc=client.protocol.encrypt(secret,bytes(16)),
+                    permissions=ClientPin.PERMISSION.MAKE_CREDENTIAL,permissions_rpid="example.test"))
+                variable = subprocess.check_output(["tpm2_getcap","-T",tcti,"properties-variable"],text=True)
+                counter = re.search(r"TPM2_PT_LOCKOUT_COUNTER:\s*(0x[0-9a-fA-F]+|\d+)",variable)
+                assert counter and int(counter[1],0) >= 2, "configured-PIN marker bypassed TPM verification"
+                print("PASS: configured-PIN marker cannot authorize; zero candidate is rejected by TPM",flush=True)
+
                 first = register(ctap,pin,b"first-account")
                 second = register(ctap,pin,b"second-account")
                 sign(ctap,pin,first)
@@ -192,7 +205,14 @@ def main():
 
                 old_parent = (state / "v1" / "65536").read_bytes()
                 before = {f.name:f.read_bytes() for f in (state / "v1").iterdir() if 1700 <= int(f.name) < 2000}
+                # Exercise the existing forced-change comparison through KeyStore:
+                # it may compare only the candidate just verified by TPM, not the marker.
+                force = state / "v1" / "02040"
+                os.close(os.open(force,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600))
+                expect(CtapError.ERR.PIN_POLICY_VIOLATION,lambda:ClientPin(ctap).change_pin(pin,pin))
+                assert force.exists()
                 ClientPin(ctap).change_pin(pin,new_pin)
+                assert not force.exists(), "successful PIN change did not clear forced-change state"
                 assert before == {f.name:f.read_bytes() for f in (state / "v1").iterdir() if 1700 <= int(f.name) < 2000}
                 sign(ctap,new_pin,first)
                 pipe.close(); pipe = None

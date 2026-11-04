@@ -10,7 +10,6 @@ use opensk::{
     api::{
         key_store::{self, CredentialSource, KeyStore},
         persist::{Persist, PersistIter},
-        pin::PinAuthority,
     },
     ctap::{
         secret::Secret,
@@ -24,7 +23,6 @@ use std::{
     sync::mpsc::{self, SyncSender},
     time::Duration,
 };
-use subtle::ConstantTimeEq;
 use tss_esapi::{constants::response_code::Tss2ResponseCodeKind as RcKind, tcti_ldr::TctiNameConf};
 
 type Task = Box<dyn FnOnce(&mut Tpm, &Store) + Send>;
@@ -229,14 +227,37 @@ impl Persist for Backend {
         Ok(0)
     }
     fn pin_hash(&self) -> CtapResult<Option<[u8; 16]>> {
-        Err(Status::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
+        // Opaque configured-PIN marker, never a verifier or authorization.
+        // Candidates use Env::verify_pin; decryption requires an existing grant.
+        Ok(self.is_set()?.then_some([0; 16]))
     }
-    fn set_pin(&mut self, _: &[u8; 16], _: u8) -> CtapResult<()> {
-        Err(Status::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
+    fn set_pin(&mut self, hash: &[u8; 16], length: u8) -> CtapResult<()> {
+        if !(8..=63).contains(&length) {
+            return Err(Status::CTAP2_ERR_PIN_POLICY_VIOLATION);
+        }
+        let new = Secret::from_exposed_secret(*hash);
+        let record = if self.is_set()? {
+            let record = self.parent()?;
+            let old = self.hash()?;
+            self.run(false, move |tpm, _| {
+                tpm.change_pin(&record, &old, &new, length)
+            })?
+        } else {
+            self.run(false, move |tpm, _| tpm.provision(&new, length))?
+        };
+        let result = self.write_record(
+            PARENT,
+            record
+                .encode()
+                .map_err(|_| Status::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?,
+        );
+        self.clear();
+        result?;
+        self.remove(opensk::api::persist::keys::FORCE_PIN_CHANGE)
     }
 }
 
-impl PinAuthority for Backend {
+impl Backend {
     fn is_set(&self) -> CtapResult<bool> {
         self.read_record(PARENT)?
             .map(|bytes| ParentRecord::decode(&bytes))
@@ -244,22 +265,7 @@ impl PinAuthority for Backend {
             .map(|r| r.is_some())
             .map_err(|_| Status::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
     }
-    fn install(&mut self, hash: &[u8; 16], length: u8) -> CtapResult<()> {
-        if self.is_set()? || !(8..=63).contains(&length) {
-            return Err(Status::CTAP2_ERR_PIN_AUTH_INVALID);
-        }
-        let hash = Secret::from_exposed_secret(*hash);
-        let record = self.run(false, move |tpm, _| tpm.provision(&hash, length))?;
-        self.write_record(
-            PARENT,
-            record
-                .encode()
-                .map_err(|_| Status::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?,
-        )?;
-        self.clear();
-        Ok(())
-    }
-    fn verify(&mut self, hash: &[u8; 16]) -> CtapResult<bool> {
+    pub fn verify(&mut self, hash: &[u8; 16]) -> CtapResult<bool> {
         self.clear();
         let record = self.parent()?;
         let hash = Secret::from_exposed_secret(*hash);
@@ -281,29 +287,7 @@ impl PinAuthority for Backend {
             Ok(false)
         }
     }
-    fn replace_verified(&mut self, new: &[u8; 16], length: u8) -> CtapResult<()> {
-        let record = self.parent()?;
-        let old = self.hash()?;
-        let new = Secret::from_exposed_secret(*new);
-        let next = self.run(false, move |tpm, _| {
-            tpm.change_pin(&record, &old, &new, length)
-        })?;
-        let result = self.write_record(
-            PARENT,
-            next.encode()
-                .map_err(|_| Status::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?,
-        );
-        self.clear();
-        result
-    }
-    fn matches_verified(&self, hash: &[u8; 16]) -> bool {
-        self.0
-            .grant
-            .borrow()
-            .as_ref()
-            .is_some_and(|g| bool::from(g.hash.as_slice().ct_eq(hash)))
-    }
-    fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.0.grant.borrow_mut().take();
     }
 }
@@ -339,15 +323,17 @@ impl KeyStore for Backend {
     }
     fn encrypt_pin_hash(
         &mut self,
-        _: &[u8; 16],
+        plain: &[u8; 16],
     ) -> std::result::Result<[u8; 16], key_store::Error> {
-        Err(key_store::Error)
+        // Passed directly to set_pin, which authorizes/wraps in TPM; never stored.
+        Ok(*plain)
     }
     fn decrypt_pin_hash(
         &mut self,
         _: &[u8; 16],
     ) -> std::result::Result<Secret<[u8; 16]>, key_store::Error> {
-        Err(key_store::Error)
+        // Only for same-PIN checks after hardware verification, never verification.
+        self.hash().map_err(|_| key_store::Error)
     }
 }
 

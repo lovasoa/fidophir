@@ -50,8 +50,10 @@ sequenceDiagram
 
 OpenSK is pinned to `8c81bc299886deb221beed35e2fe01a822649d67`; the repository references it through the `vendor/OpenSK` Git submodule.
 The build uses only its standalone library and CBOR crate. `make prepare` applies
-our patch into ignored `build/` outputs; the upstream checkout stays unchanged. The patch adds a PIN authority, presence
-context, two platform credential hooks, and a resident-only guard.
+our patch into ignored `build/` outputs; the upstream checkout stays unchanged.
+Only three upstream files change: Env, ClientPIN, and three credential calls in
+the dispatcher. PIN setup/change reuse Persist and KeyStore; presence context
+and resident-only policy use the existing platform pre-dispatch hook.
 See [patch notes](patches/README.md). Upstream owns CTAP parsing, PIN crypto,
 permissions, token timers, credential management, CBOR and HID fragmentation.
 

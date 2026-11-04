@@ -2,18 +2,24 @@
 //! Test-only CBOR pipe transport for independent FIDO clients; never packaged.
 use fidophir::{env::LinuxEnv, io::Io};
 use opensk::ctap::hid::{CtapHid, CtapHidCommand, HidPacketIterator, Message, MessageAssembler};
-use opensk::{Ctap, Transport};
+use opensk::ctap::{CtapState, main_hid::MainHid};
 use std::io::{Read, Write};
 
-fn exchange(ctap: &mut Ctap<LinuxEnv>, io: &fidophir::io::SharedIo, message: Message) -> Message {
+fn exchange(
+    env: &mut LinuxEnv,
+    state: &mut CtapState<LinuxEnv>,
+    hid: &mut MainHid<LinuxEnv>,
+    io: &fidophir::io::SharedIo,
+    message: Message,
+) -> Message {
     let mut assembler = MessageAssembler::<LinuxEnv>::default();
     let mut answer = None;
     for frame in HidPacketIterator::new(message).expect("bounded test request") {
         io.borrow_mut().enter(frame[..4].try_into().unwrap());
-        for reply in ctap.process_hid_packet(&frame, Transport::MainHid) {
+        for reply in hid.process_hid_packet(env, &frame, false, state) {
             let (cid, packet) = CtapHid::<LinuxEnv>::process_single_packet(&reply);
             if let Some(message) = assembler
-                .parse_packet(ctap.env(), cid, packet)
+                .parse_packet(env, cid, packet)
                 .expect("test response framing")
             {
                 answer = Some(message);
@@ -35,7 +41,7 @@ fn main() {
     let context = glib::MainContext::default();
     let _guard = context.acquire().expect("test main context");
     let io = Io::shared();
-    let env = if args[3].starts_with("native") {
+    let mut env = if args[3].starts_with("native") {
         LinuxEnv::for_test_native(args[1].clone().into(), &args[2], io.clone())
     } else {
         LinuxEnv::for_test(
@@ -46,9 +52,12 @@ fn main() {
         )
     }
     .expect("test environment");
-    let mut ctap = Ctap::new(env);
+    let mut state = CtapState::new(&mut env);
+    let mut hid = MainHid::default();
     let init = exchange(
-        &mut ctap,
+        &mut env,
+        &mut state,
+        &mut hid,
         &io,
         Message {
             cid: [0xff; 4],
@@ -72,7 +81,7 @@ fn main() {
         assert!((1..=7609).contains(&length));
         let mut bytes = vec![0; length];
         input.read_exact(&mut bytes).expect("test input");
-        ctap.can_sleep();
+        state.can_sleep(&mut env);
         if args[3] == "native-cancel" && bytes[0] == 1 {
             let io = io.clone();
             glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
@@ -83,7 +92,9 @@ fn main() {
             });
         }
         let response = exchange(
-            &mut ctap,
+            &mut env,
+            &mut state,
+            &mut hid,
             &io,
             Message {
                 cid,

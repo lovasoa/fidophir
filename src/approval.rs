@@ -187,6 +187,8 @@ pub struct Approval {
     seat: String,
     pending: Option<Pending>,
     start_error: bool,
+    operation: Option<&'static str>,
+    rp_id: Option<String>,
     #[cfg(any(test, feature = "integration-tests"))]
     test_decision: Option<bool>,
 }
@@ -201,6 +203,8 @@ impl Approval {
             seat,
             pending: None,
             start_error: false,
+            operation: None,
+            rp_id: None,
             #[cfg(any(test, feature = "integration-tests"))]
             test_decision: None,
         })
@@ -214,8 +218,14 @@ impl Approval {
             seat: String::new(),
             pending: None,
             start_error: false,
+            operation: None,
+            rp_id: None,
             test_decision: Some(allow),
         }
+    }
+    pub fn set_context(&mut self, operation: Option<&'static str>, rp: Option<&str>) {
+        self.operation = operation;
+        self.rp_id = rp.map(str::to_owned);
     }
     fn cancel(&mut self) {
         if let Some(pending) = self.pending.take() {
@@ -240,7 +250,7 @@ impl Approval {
 }
 
 impl UserPresence for Approval {
-    fn check_init(&mut self, request: ApprovalRequest<'_>) {
+    fn check_init(&mut self) {
         self.cancel();
         self.start_error = false;
         #[cfg(any(test, feature = "integration-tests"))]
@@ -248,7 +258,7 @@ impl UserPresence for Approval {
             return;
         }
         let mut nonce = [0u8; 16];
-        let rp = match request.rp_id {
+        let rp = match self.rp_id.as_deref() {
             Some(id)
                 if id.len() <= 253
                     && !id.is_empty()
@@ -262,14 +272,11 @@ impl UserPresence for Approval {
             }
             None => String::new(),
         };
-        let operation = match request.operation {
-            Operation::Create => "create a passkey",
-            Operation::Sign => "sign in",
-            Operation::Select => "select the authenticator",
-            Operation::InitializePin => "initialize the authenticator PIN",
-            Operation::Reset => "reset the authenticator",
-        }
-        .to_owned();
+        let Some(operation) = self.operation else {
+            self.start_error = true;
+            return;
+        };
+        let operation = operation.to_owned();
         if SysRng.try_fill_bytes(&mut nonce).is_err() {
             self.start_error = true;
             return;

@@ -9,7 +9,7 @@ rust-version = "1.92"
 integration-tests = ["opensk/std"]
 
 [dependencies]
-opensk = { path = "build/opensk", default-features = false, features = ["software_crypto", "resident_only"] }
+opensk = { path = "build/opensk", default-features = false, features = ["software_crypto"] }
 sk-cbor = { path = "build/cbor" }
 glib = { version = "0.22.10", features = ["v2_66"] }
 gio = "0.22.10"
@@ -18,7 +18,6 @@ rand = { version = "0.10.3", default-features = false, features = ["std", "std_r
 tss-esapi = "7.6.0"
 uhid-virt = "0.0.8"
 p256 = { version = "0.14", default-features = false, features = ["alloc", "ecdsa"] }
-subtle = "2"
 
 [[bin]]
 name = "fidophir"

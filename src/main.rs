@@ -5,7 +5,7 @@ use fidophir::{
     io::{Io, dispatch_desktop},
 };
 use opensk::ctap::hid::{CtapHidCommand, HidPacketIterator, Message};
-use opensk::{Ctap, Transport};
+use opensk::ctap::{CtapState, main_hid::MainHid};
 use std::{path::PathBuf, time::Duration};
 
 fn run() -> Result<()> {
@@ -40,18 +40,19 @@ fn run() -> Result<()> {
         .acquire()
         .map_err(|_| Error::Invalid("desktop main context unavailable"))?;
     let io = Io::shared();
-    let env = LinuxEnv::new(PathBuf::from("/var/lib/fidophir"), io.clone(), uid, seat)?;
-    let mut ctap = Ctap::new(env);
+    let mut env = LinuxEnv::new(PathBuf::from("/var/lib/fidophir"), io.clone(), uid, seat)?;
+    let mut state = CtapState::new(&mut env);
+    let mut hid = MainHid::default();
     io.borrow_mut().publish()?;
     eprintln!("fidophir: authenticator ready");
     loop {
         dispatch_desktop();
-        ctap.can_sleep();
+        state.can_sleep(&mut env);
         let packet = io.borrow_mut().receive()?;
         if let Some(packet) = packet {
             let cid = packet[..4].try_into().expect("fixed HID packet");
             io.borrow_mut().enter(cid);
-            let frames = ctap.process_hid_packet(&packet, Transport::MainHid);
+            let frames = hid.process_hid_packet(&mut env, &packet, false, &mut state);
             let frames = if io.borrow().cancelled() {
                 HidPacketIterator::new(Message {
                     cid,

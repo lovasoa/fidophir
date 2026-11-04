@@ -18,14 +18,16 @@ No physical TPM, host policy, user groups or website credentials were modified.
   allocates a real CTAPHID channel and fragments/reassembles messages through the
   upstream HID core. It exercises:
   * ClientPIN v2 setup and hardware rejection of an incorrect PIN, independently
-    checked by reading the TPM DA counter;
+    checked by reading the TPM DA counter; rejection of an all-zero candidate
+    matching the public configured-PIN marker, also checked against TPM DA;
   * two TPM-generated resident keys, self-attestation and signatures independently
     verified using the returned COSE public keys;
   * always-UV, presence flags, zero counters, no software verifier record or clear
     PIN hash in state, resident-only rejection and RP-bound tokens;
   * actual 30-second token expiry and reauthorization;
   * PIN change preserving credential files, new-PIN success and old-PIN rejection
-    across process restart, plus standard credential enumeration;
+    across process restart, forced same-PIN rejection and removal of the forced-change
+    flag after a successful change, plus standard credential enumeration;
   * a corrupted TPM private blob stopping the process with status 1; restart rejects
     old tokens and requires fresh PIN authorization before signing;
   * no loaded TPM objects/sessions left after graceful shutdown;
@@ -34,7 +36,8 @@ No physical TPM, host policy, user groups or website credentials were modified.
   * eight wrong attempts, per-process soft blocks and permanent retry exhaustion
     surviving restarts, including rejection of the correct PIN after exhaustion.
 * `tests/desktop.py`: actual native GIO adapter on a **private D-Bus**, fake login1/
-  polkit services and disposable swtpm. Tests typed wire calls, operation/RP context,
+  polkit services and disposable swtpm. Tests typed wire calls, operation/RP context, denied initial PIN setup leaving
+  configuration untouched,
   success, denied/silent/retained/temporary/no-agent results, locked/inactive/remote/
   wrong-owner/ambiguous sessions, and lock changes after approval. Cancellation
   reaches `CancelCheckAuthorization`; a deliberately late success cannot authorize

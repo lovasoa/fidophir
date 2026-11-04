@@ -3,7 +3,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 if [ -f BUNDLED-SOURCES ]; then
-    test -f build/opensk/src/api/pin.rs
+    test -f build/opensk/src/env/mod.rs
     test -f build/cbor/Cargo.toml
     test -f build/opensk-revision
     exit 0

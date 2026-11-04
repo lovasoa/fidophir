@@ -56,46 +56,51 @@ Chromium, sandboxed browser packages, U2F-only registration, synchronization, mi
 
 ## 3. Exactly what changes in OpenSK
 
-These are **proposed patches**, not interfaces already present upstream. Keep each patch separate against the pinned source.
+Only three upstream files change. The full diff is in `patches/opensk.patch`;
+`patches/FILES` lists its scope. Generic crypto traits, the presence API, storage
+logic, Cargo features and TestEnv remain upstream originals.
 
-### A. Hardware PIN authority
+| File | What we inject |
+| --- | --- |
+| `env/mod.rs` | Optional default hooks: `verify_pin`, `clear_pin_authorization`, `new_credential_key`, `sign_credential`. |
+| `ctap/client_pin.rs` | Candidate verification after durable retry decrement; grant cleanup with token lifecycle; existing presence loop before initial PIN setup. |
+| `ctap/mod.rs` | Three calls through credential creation/signing hooks. |
 
-Add `Env::PinAuthority` with this contract:
+### Existing platform interfaces
 
-```text
-is_set() -> Result<bool>
-install(hash16, code_point_length) -> Result<()>
-verify(hash16) -> Result<bool>              # TPM check; false means wrong authorization
-replace_verified(new_hash16, length) -> Result<()>
-matches_verified(hash16) -> bool            # current verified cache only
-clear()                                    # zeroize H and unsealed master
-```
+Linux uses the existing `Env::process_vendor_command` pre-dispatch hook for the
+resident-only policy and request context. It calls upstream `Command::deserialize`,
+copies the operation/RP into our approval adapter, and returns `None` for normal
+core processing. Nonresident registration returns the standard unsupported-option
+response. The core then parses normally: two calls to the same upstream parser,
+no custom parser, new dispatcher or presence API. Malformed requests keep the
+core's original response. Each hook call clears previous context first; an
+unexpected presence request without context is denied.
 
-`hash16` is ClientPIN's existing `SHA256(PIN)[0..16]`. It is PIN-equivalent secret material, never a stored software verifier.
+`Persist::set_pin` provisions or changes the TPM parent using ClientPIN's existing
+`SHA256(PIN)[0..16]`. `Persist::pin_hash` returns only `Some([0;16])` or `None` to
+indicate configuration. The marker is public and never compared to candidates.
+`Env::verify_pin` is the sole verification path; Linux overrides it to ask TPM.
+The default preserves upstream software verification for the unchanged TestEnv.
 
-Patch `ctap/client_pin.rs::verify_pin_hash_enc`: retain shared-secret decryption, exact-length checks, retry decrement, key-agreement regeneration and CTAP error handling; replace stored-hash comparison with `verify`. TPM lockout maps to authorization blocked, never success. Commit the software retry decrement **before** TPM verification; no outer transaction may roll it back after a crash.
+Existing `KeyStore::encrypt_pin_hash` passes the new candidate directly to our
+`set_pin`; it is never written as a verifier. `decrypt_pin_hash` returns only the
+already hardware-verified, zeroizing cached hash for the core's forced-change
+same-PIN comparison. With no current grant it fails. Wrong PINs retain both core
+retry accounting and TPM anti-hammering. Tests submit the zero marker as a candidate
+and verify hardware rejection and an increased DA counter.
 
-Patch `check_and_store_new_pin`, `process_set_pin`, and `process_change_pin` to call install/replace. Retain engine PIN parsing and policy checks. Replace configured-PIN tests in GetInfo, MakeCredential, ClientPIN and `ctap/storage.rs::has_user_verification` with `is_set`; replace old-PIN equality checks with `matches_verified` using existing constant-time comparison. Remove Linux production paths to `Persist::pin_hash/set_pin` and `KeyStore::encrypt_pin_hash/decrypt_pin_hash`. Keep a software authority for upstream tests. Inventory remaining references with rg, including feature-gated code; no default software verifier may remain reachable in the production feature set.
+Before another verification, on ClientPIN error/reset and on token expiry, revoke
+the cached TPM authorization. First PIN installation uses the unchanged presence
+loop after PIN policy/MAC checks; denial leaves configuration untouched. The host
+initializes upstream `CtapState` and `MainHid` directly. It polls
+`state.can_sleep(&mut env)` during idle, so Wink cannot skip the token observer.
+There is no second token timer or patched top-level CTAP wrapper. The existing
+30-second lifetime and admitted-operation semantics remain.
 
-Before another verification attempt, revoke the preceding token and clear its TPM cache. Clear again on verification failure, `ClientPin::reset_pin_uv_auth_token`, reset, and token expiry. Hook `update_timeouts` when token state changes from in-use to expired. The host invokes `Ctap::can_sleep()` at least every 100 ms while idle. In that wrapper, evaluate `state.can_sleep(&mut env)` before the wink check so its token observer cannot be skipped by boolean short-circuiting. Keep the engine's 30-second absolute token lifetime; no second token timer. An operation already admitted may finish within its existing presence timeout; do not promise instantaneous wall-clock memory erasure.
-
-Initial SetPIN also requires native approval. Pass its existing Channel through to `process_set_pin`; approval precedes install. Otherwise any permitted hidraw client could silently claim the uninitialized device. Cancellation before the state commit leaves initialization unchanged; a commit already submitted must finish, even if the client subsequently cancels.
-
-### B. Presence context
-
-Extend `UserPresence::check_init` with `ApprovalRequest { operation, rp_id }`. Operation is a fixed enum: create passkey, sign in, select authenticator, initialize PIN, reset. RP text comes from the core's decoded request. Thread this through `check_user_presence` and its existing callers; no second CTAP parser.
-
-Keep `wait_with_timeout`, `check_complete` and the engine's existing presence loop: it handles cancellation and busy channels, sends UP_NEEDED keepalives every 100 ms, and times out after 30 seconds. Our adapter runs within that loop. GetNextAssertion belongs to the same RP/challenge operation. [Presence trait](https://github.com/google/OpenSK/blob/8c81bc299886deb221beed35e2fe01a822649d67/libraries/opensk/src/api/user_presence.rs), [Existing loop](https://github.com/google/OpenSK/blob/8c81bc299886deb221beed35e2fe01a822649d67/libraries/opensk/src/ctap/mod.rs)
-
-### C. Platform credential hooks and fatal faults
-
-Keep upstream's crypto traits and `PrivateKey` API unchanged. Add only two optional
-methods to `Env`: `new_credential_key(algorithm)` and
-`sign_credential(key, message)`. Their defaults call the original software helpers.
-The three CTAP2 call sites (creation, self-attestation, assertion) use those hooks;
-Linux overrides them to call its existing backend. Keys contain only opaque TPM
-blobs and public material. No thread-local backend lookup or per-key backend
-reference is needed. Import/export and public-key access remain pure operations.
+Credential hooks call the existing TPM backend explicitly. Keys contain only
+opaque blobs and public material; import/export and public-key access are pure.
+No thread-local registry or per-key backend reference is needed.
 
 Linux's infallible `EcSecretKey::random` and `sign` methods are fail-stop guards:
 reaching one exits with a diagnostic instead of creating a software key or signature.
@@ -112,21 +117,21 @@ or time out; Firefox's precise UI/retry behavior still needs physical validation
 Expected incorrect PIN, hardware lockout, presence denial and cancellation remain
 ordinary CTAP refusals. No empty signatures or software credential fallback.
 
-The resident-only guard in §2 is the remaining profile change. A permanent rewrite of ClientPIN, cancellation or credential management would defeat this architecture.
+The resident-only policy is in the host pre-dispatch hook. No additional engine feature or alternate credential dispatcher is added.
 
 ## 4. Linux host and transport
 
-Implement the real Env trait: Crypto selects OpenSK's software AES/ECDH/SHA/HMAC/HKDF and our TpmEcdsa. A local RNG wrapper forwards to `StdRng::try_from_rng(&mut SysRng)` using rand features std/std_rng/sys_rng, with startup failure if seeding fails. Clock uses `nix::time::clock_gettime(ClockId::CLOCK_BOOTTIME)` so suspend counts; default timers are expired. `nix::sys::prctl::set_dumpable(false)` runs before secrets. Enable nix process/time features. Write discards disabled debug output. Persist/KeyStore/UserPresence/PinAuthority/HidConnection follow the contracts below. [Clock API](https://docs.rs/nix/0.31.3/nix/time/fn.clock_gettime.html), [Dumpability API](https://docs.rs/nix/0.31.3/nix/sys/prctl/fn.set_dumpable.html)
+Implement the real Env trait: Crypto selects OpenSK's software AES/ECDH/SHA/HMAC/HKDF and our TpmEcdsa. A local RNG wrapper forwards to `StdRng::try_from_rng(&mut SysRng)` using rand features std/std_rng/sys_rng, with startup failure if seeding fails. Clock uses `nix::time::clock_gettime(ClockId::CLOCK_BOOTTIME)` so suspend counts; default timers are expired. `nix::sys::prctl::set_dumpable(false)` runs before secrets. Enable nix process/time features. Write discards disabled debug output. Persist/KeyStore/UserPresence/HidConnection follow the contracts below. [Clock API](https://docs.rs/nix/0.31.3/nix/time/fn.clock_gettime.html), [Dumpability API](https://docs.rs/nix/0.31.3/nix/sys/prctl/fn.set_dumpable.html)
 
 One thread executes OpenSK; one blocking-I/O worker owns ESAPI and performs record reads/listing/writes/deletions. A bounded channel permits one job in flight. No parallel CTAP execution, application request queue, broker or Tokio runtime. There is no application-wide credential-record cache: the filesystem is authoritative and the kernel supplies ordinary file caching. The worker never decides presence or credential policy. Worker messages move owned parameters/results, and the protocol thread pumps transport during reads as well as writes and TPM operations.
 
-The environment passes the backend explicitly through patch C. No thread-local backend registry, per-key backend back-reference, unsafe global pointer or cross-thread Env borrowing. The short-lived PIN authorization/master cache required by the engine's token lifecycle remains; it is separate from the eliminated record cache.
+The environment passes the backend explicitly through its credential hooks. No thread-local backend registry, per-key backend back-reference, unsafe global pointer or cross-thread Env borrowing. The short-lived PIN authorization/master cache required by the engine's token lifecycle remains; it is separate from the eliminated record cache.
 
 ### UHID, not a USB gadget
 
 Create one `uhid-virt::UHIDDevice<File>`. Identity: name `Fidophir TPM`, Bus::VIRTUAL (0006), vendor 0000, product 0001, unique string `fidophir-v1`. Fixed descriptor: FIDO usage page 0xF1D0, usage 1, unnumbered 64-byte input/output, no feature reports. No libusb, USB/IP, configfs or controller driver.
 
-Accept Output only with exactly 64 bytes; forward unchanged to `Ctap::process_hid_packet(..., Transport::MainHid)`. Write every returned frame through the binding, checking the full UHID-event syscall count, not a mistaken 64-byte write count. Unsupported GetReport/SetReport receive positive EIO with their original request IDs. Start must indicate unnumbered reports. Stop/permanent I/O failure ends service. Open/Close represent aggregate usage, not browser identity. Closing the fd removes the device. [Kernel UHID contract](https://docs.kernel.org/hid/uhid.html)
+Normalize an unnumbered hidraw report-ID zero prefix when present, then accept exactly 64 bytes and pass them to upstream `MainHid::process_hid_packet` with the environment and CTAP state. Write every returned frame through the binding, checking the full UHID-event syscall count, not a mistaken 64-byte write count. Unsupported GetReport/SetReport receive positive EIO with their original request IDs. Start must indicate unnumbered reports. Stop/permanent I/O failure ends service. Open/Close represent aggregate usage, not browser identity. Closing the fd removes the device. [Kernel UHID contract](https://docs.kernel.org/hid/uhid.html)
 
 The binding opens nonblocking but exposes no pollable fd. Use its public read API in a bounded loop, dispatch GLib events and sleep at most 5 ms between attempts. This costs up to 200 idle wakeups/second and avoids another fork. No handwritten ABI layouts or report reassembly.
 
@@ -162,7 +167,7 @@ Hold an exclusive nonblocking advisory flock on the store-directory fd for the p
 
 TPM Create produces wrapped blobs/transient objects only; crashing before a credential record commits leaves no persistent TPM key to garbage-collect. This layout maps directly to OpenSK's per-key persistence contract and removes our aggregate snapshot encoding and whole-store rewrites. It provides no additional rollback protection.
 
-Implement the existing `KeyStore` trait as a resident-only adapter. `init` is a no-op; `reset` clears its volatile cache. `wrap_credential` returns an error (unreachable after the profile guard); `unwrap_credential` always returns Ok(None), because the engine searches resident records separately. Thus an allow-list ID from another device needs no TPM access. `cred_random(has_uv)` returns the corresponding 32-byte half of the authorized, sealed 64-byte master; the engine retains its existing per-credential derivation. Without authorization return an error. Old encrypt/decrypt-PIN-hash methods return errors and become unreachable after patch A. Do not implement `KeyStore::Helper` or use its software-PIN/default master-generation path. No encryption/wrapping keys for nonresident credentials are needed.
+Implement the existing `KeyStore` trait as a resident-only adapter. `init` is a no-op; `reset` clears its volatile cache. `wrap_credential` returns an error (unreachable after the profile guard); `unwrap_credential` always returns Ok(None), because the engine searches resident records separately. Thus an allow-list ID from another device needs no TPM access. `cred_random(has_uv)` returns the corresponding 32-byte half of the authorized, sealed 64-byte master; the engine retains its existing per-credential derivation. Without authorization return an error. The PIN-method overrides follow §3; their temporary values are never persisted as software verifiers. Do not implement `KeyStore::Helper` or use its software-PIN/default master-generation path. No encryption/wrapping keys for nonresident credentials are needed.
 
 ## 5. TPM objects and command contracts
 
@@ -280,7 +285,7 @@ Lock checks are not atomic with signing; suspend/hibernation may preserve secret
 
 | Order | Deliverable | Required evidence |
 |---|---|---|
-| 1 | Three interface patches and resident-only guard | Upstream tests still pass with software test authority; targeted tests cover rejected H, reset/expiry clearing, platform key hooks, SetPIN cancellation and RP context. Report patch size separately from vendor size. |
+| 1 | Three-file platform integration | Upstream tests still pass with its unchanged software TestEnv; targeted tests cover rejected H, reset/expiry clearing, platform key hooks, SetPIN cancellation and RP context. Report patch size separately from vendor size. |
 | 2 | TPM adapter on disposable swtpm | Protected sessions/exact attributes; correct/wrong PIN and DA lockout; restart; PIN change preserves K; old parent demonstrates rollback limit; no exported scalar or surviving child handle. |
 | 3 | LinuxEnv/record-files/UHID/worker | Independent libfido2 or Python fido2 registers resident ES256, restarts and verifies assertions. Cancel during approval/TPM work releases no result; keepalives continue during durable writes; crash tests cover record creation/replacement/deletion, retry decrements, bundled PIN changes, sync failure, temporary residue, corrupt/oversized records and rejection of a second writer. |
 | 4 | RPM files in Fedora 44 GNOME VM | Check actual UID/capabilities/device ACLs; system bus under sandbox; locked/inactive/wrong owner denial; missing agent and stale callbacks fail; fresh required prompts; SELinux enforcing. Record fingerprint and password behavior separately. |
@@ -290,6 +295,6 @@ Use synthetic credentials/accounts until hardware integration is established; te
 
 **Implementation evidence (2026-11-04):** the Rust implementation is in this directory. The patched core passes 346 library tests with --no-default-features --features std --lib and 393 with upstream defaults plus std. The host passes filesystem/HID unit tests and warning-free Clippy. Independent python-fido2 tests against disposable swtpm exercise full upstream CTAPHID framing, ClientPIN v2, TPM-backed registration/signing, hardware DA increment on wrong PIN, persistent retry lockout, token expiry, PIN change/restart, RP binding, credential enumeration and fail-stop handling of unexpected TPM errors. Native GIO login1/polkit wire tests use a private D-Bus double, covering rejected sessions/policy results, cancellation and stale callbacks. Old-parent rollback after PIN change is reproduced explicitly. These are simulator/private-bus tests, not physical-browser validation. See `VALIDATION.md` for precise results and remaining checks.
 
-The three interface changes are delivered as one complete upstream patch because their call sites overlap; there is no TLS backend. Worker jobs use typed in-process closures over a bounded channel rather than a serialized command enum. The source includes a local Fedora RPM recipe, declarative installation files and an offline source bundler. The default workspace sandbox hides the device nodes; outside it, /dev/tpmrm0 is root:tss 0660 and /dev/uhid is root:root 0600. The current user cannot open either device, and noninteractive sudo requires a password; native GNOME, actual udev ACL matching, SELinux runtime behavior and Google/GitHub Firefox acceptance remain pending. No service or account has been installed on the host.
+The integration diff changes only Env, ClientPIN and the three credential calls in the dispatcher; there is no TLS backend. Worker jobs use typed in-process closures over a bounded channel rather than a serialized command enum. The source includes a local Fedora RPM recipe, declarative installation files and an offline source bundler. The default workspace sandbox hides the device nodes; outside it, /dev/tpmrm0 is root:tss 0660 and /dev/uhid is root:root 0600. The current user cannot open either device, and noninteractive sudo requires a password; native GNOME, actual udev ACL matching, SELinux runtime behavior and Google/GitHub Firefox acceptance remain pending. No service or account has been installed on the host.
 
 Upstream source is a pinned Git submodule at `vendor/OpenSK`. `make prepare` applies the reviewed patch to ignored build outputs; release bundles include that exact prepared library snapshot for offline builds.

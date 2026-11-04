@@ -1,47 +1,38 @@
 # OpenSK integration diff
 
-Upstream: https://github.com/google/OpenSK
+Upstream: https://github.com/google/OpenSK at
+`8c81bc299886deb221beed35e2fe01a822649d67`, directory `libraries/opensk`.
+The pinned `vendor/OpenSK` submodule stays untouched. `make prepare` copies the
+standalone library and its unmodified CBOR sibling into ignored build outputs,
+then applies `opensk.patch` with Git. The engine-test lockfile lives separately
+in `locks/opensk.Cargo.lock`. Release archives contain the exact prepared sources.
 
-Commit: `8c81bc299886deb221beed35e2fe01a822649d67`
+Only three upstream files change; `FILES` is the complete inventory:
 
-Base directory: `libraries/opensk`. `vendor/OpenSK` is a pinned Git submodule; `build/cbor` is its unmodified sibling crate
-from the same commit. Apache-2.0 licenses are retained. No embedded kernel is included.
+| File | Injection points |
+| --- | --- |
+| `src/env/mod.rs` | Default methods for PIN verification/revocation and credential creation/signing. Software defaults preserve the existing TestEnv. |
+| `src/ctap/client_pin.rs` | Delegate candidate verification after durable retry decrement; revoke platform grants with token reset/expiry/errors; require existing presence loop before first PIN setup. |
+| `src/ctap/mod.rs` | Three credential calls: generation, self-attestation, assertion. |
 
-`opensk.patch` is the complete integration diff, including test adaptations.
-`FILES` lists affected files. Apply with `patch -p1` inside a fresh copy of the
-upstream standalone library; compare the result with `build/opensk` after `make prepare`.
-The build creates those ignored outputs from the submodule and never changes the
-upstream checkout. No copied third-party implementation is tracked in this repository.
-The engine lockfile in `locks/opensk.Cargo.lock` is a separate build input, not part of that diff.
+Linux policy and RP prompt context use the **existing**
+`Env::process_vendor_command` pre-dispatch hook. The adapter calls OpenSK's
+`Command::deserialize`, sets request context, and normally returns `None` for core
+processing; nonresident creation returns the standard unsupported-option response.
+The core parses again normally. Both passes use upstream's parser; there is no
+custom wire-format logic or protocol dispatcher in the adapter.
 
-The planned three interface changes are combined into one patch because their
-call sites overlap. Review them by interface:
+Existing `Persist::set_pin` provisions/changes TPM authorization. `pin_hash`
+returns an opaque all-zero configured-PIN marker, never a verifier. Only the
+candidate-verification hook checks PINs, in TPM. Existing `KeyStore` PIN methods
+pass a new candidate directly to `set_pin` or expose the currently verified cache
+for the forced-change equality check; no verifier file is written.
 
-1. `api/pin.rs`, `env`, `client_pin.rs`, `storage.rs`: remove production dependence
-   on a stored software PIN verifier. Delegate install/verify/change/clear to
-   `PinAuthority`. Persist a retry before hardware verification. Revoke cached
-   authorization on token reset/expiry and all ClientPIN command errors. TestEnv
-   keeps its upstream software verifier strictly for library tests.
-2. `api/user_presence.rs`, `ctap/mod.rs`, `client_pin.rs`: pass operation and RP
-   context through the existing presence loop, including fresh approval before
-   first PIN installation. Existing keepalive and cancellation behavior stays in
-   the core. No second CTAP parser or custom prompt machinery is added.
-3. `env`, `ctap/mod.rs`: add two optional platform hooks for credential creation
-   and signing. Linux overrides them to call the TPM. Their defaults preserve
-   upstream software behavior. Generic crypto traits, private-key helpers, CTAP1,
-   credential management and their fixtures stay unchanged. Unexpected TPM errors
-   stop the service; systemd handles restart. Expected PIN refusals and cancellation
-   still use the engine's normal error responses.
+The generic crypto API, presence API, storage logic, manifest, fingerprint paths,
+CTAP1, private-key helpers and TestEnv are unchanged. The host uses upstream's
+`CtapState` and `MainHid` directly, polling token expiry regardless of Wink state.
+Unexpected TPM/storage faults log and exit; systemd handles restart.
 
-ClientPIN cleanup wraps an unchanged command dispatcher in a separate method,
-so its original match does not need to be reindented in our diff.
-
-The `resident_only` feature adds an early rejection of nonresident registration
-without changing library defaults. The host selects it explicitly. Its counter
-zero behavior is a host `Persist` override, not another engine patch.
-
-Tests are run with `--no-default-features --features std --lib` (346) and with
-upstream defaults plus `std` (393). The extra timeout assertion verifies that
-expiry calls `PinAuthority::clear`; a changed failure assertion verifies that
-failed forced-PIN changes no longer retain authorization. Hardware paths are
-tested separately by the independent Python FIDO client against swtpm.
+Core tests: 346 with std/no defaults, 393 with upstream defaults/std. Independent
+simulator and private-D-Bus tests cover native overrides, including rejection of
+the public marker, forced-PIN-change behavior and denied initial setup.

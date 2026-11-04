@@ -14,6 +14,7 @@ use opensk::{
         private_key::PrivateKey,
     },
     ctap::{
+        command::Command,
         data_formats::{CredentialProtectionPolicy, SignatureAlgorithm},
         status_code::{Ctap2StatusCode as Status, CtapResult},
     },
@@ -155,7 +156,6 @@ impl Env for LinuxEnv {
     type UserPresence = Approval;
     type Persist = Backend;
     type KeyStore = Backend;
-    type PinAuthority = Backend;
     type Clock = HostClock;
     type Crypto = HostCrypto;
     type Write = Sink;
@@ -163,6 +163,36 @@ impl Env for LinuxEnv {
     type HidConnection = Connection;
     fn rng(&mut self) -> &mut HostRng {
         &mut self.rng
+    }
+    fn process_vendor_command(
+        &mut self,
+        bytes: &[u8],
+        _: opensk::ctap::Channel,
+    ) -> Option<Vec<u8>> {
+        // Reuse OpenSK's existing pre-dispatch hook and parser. No wire-format logic here.
+        self.approval.set_context(None, None);
+        let command = Command::deserialize(bytes).ok()?;
+        let (operation, rp) = match &command {
+            Command::AuthenticatorMakeCredential(p) => {
+                if !p.options.rk {
+                    return Some(vec![Status::CTAP2_ERR_UNSUPPORTED_OPTION as u8]);
+                }
+                ("create a passkey", Some(p.rp.rp_id.as_str()))
+            }
+            Command::AuthenticatorGetAssertion(p) => ("sign in", Some(p.rp_id.as_str())),
+            Command::AuthenticatorClientPin(_) => ("initialize the authenticator PIN", None),
+            Command::AuthenticatorSelection => ("select the authenticator", None),
+            Command::AuthenticatorReset => ("reset the authenticator", None),
+            _ => return None,
+        };
+        self.approval.set_context(Some(operation), rp);
+        None
+    }
+    fn verify_pin(&mut self, hash: &[u8; 16]) -> CtapResult<bool> {
+        self.backend.verify(hash)
+    }
+    fn clear_pin_authorization(&mut self) {
+        self.backend.clear();
     }
     fn new_credential_key(
         &mut self,
@@ -179,9 +209,6 @@ impl Env for LinuxEnv {
     }
     fn user_presence(&mut self) -> &mut Approval {
         &mut self.approval
-    }
-    fn pin_authority(&mut self) -> &mut Backend {
-        &mut self.backend
     }
     fn persist(&mut self) -> &mut Backend {
         &mut self.backend

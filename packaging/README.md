@@ -38,9 +38,9 @@ src/env.rs        OpenSK Env, clock/RNG/profile, resident KeyStore, backend refe
 src/io.rs         uhid-virt event mapping; existing core HID helpers while busy
 src/state.rs      per-record Persist via I/O worker, durable writes/unlink, parent record
 src/tpm.rs        scoped ESAPI jobs and validated TPM object templates
-src/backend.rs    typed blocking worker, PinAuthority and opaque ECDSA key implementation
+src/backend.rs    typed blocking worker, TPM PIN verification and opaque ECDSA keys
 src/approval.rs   GIO login1/polkit calls, operation-scoped cancellation
-patches/          complete OpenSK diff; three interface changes and resident-only guard
+patches/          complete OpenSK diff; Env, ClientPIN and three credential calls
 packaging/        the files in this directory
 ```
 

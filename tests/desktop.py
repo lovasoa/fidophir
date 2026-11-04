@@ -138,6 +138,10 @@ def main(binary):
             os.environ["DBUS_SYSTEM_BUS_ADDRESS"] = address
             pipe = Pipe(binary,folder / "records",tcti,"native")
             ctap = Ctap2(pipe)
+            (folder / "mode").write_text("deny")
+            expect(CtapError.ERR.OPERATION_DENIED,lambda:ClientPin(ctap).set_pin("12345678"))
+            assert not ctap.get_info().options["clientPin"], "denied setup changed PIN state"
+            (folder / "mode").write_text("allow")
             ClientPin(ctap).set_pin("12345678")
             key = register(ctap,"12345678",b"native-adapter")
             sign(ctap,"12345678",key)

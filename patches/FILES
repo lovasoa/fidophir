@@ -1,11 +1,3 @@
-Cargo.toml
-src/api/mod.rs
-src/api/pin.rs
-src/api/user_presence.rs
 src/ctap/client_pin.rs
-src/ctap/fingerprint.rs
 src/ctap/mod.rs
-src/ctap/storage.rs
 src/env/mod.rs
-src/env/test/mod.rs
-src/lib.rs
