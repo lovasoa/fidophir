@@ -4,6 +4,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -15,11 +16,16 @@ import tomllib
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--version", help="Package version; defaults to Cargo.toml")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
-    name = "fidophir-" + tomllib.loads((root / "Cargo.toml").read_text())["package"]["version"]
+    package = tomllib.loads((root / "Cargo.toml").read_text())["package"]
+    version = args.version or package["version"]
+    if not re.fullmatch(r"[0-9][0-9A-Za-z.+]*", version):
+        parser.error("invalid package version")
+    name = package["name"] + "-" + version
     subprocess.run(["sh", str(root / "tools/prepare-opensk.sh")], check=True)
     with tempfile.TemporaryDirectory(prefix="fidophir-bundle-") as temporary:
         stage = Path(temporary) / name

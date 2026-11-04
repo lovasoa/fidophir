@@ -94,3 +94,12 @@ After configuring and accepting a new package, start it explicitly; restart it
 manually after Debian upgrades. The removal hook uses standard `deb-systemd-invoke`
 to stop the unit; state is preserved. Account creation uses `dh_installsysusers`;
 there are no PAM edits or desktop-user group changes.
+
+## Commit builds
+
+`.github/workflows/packages.yml` builds both formats and publishes them through
+GitHub Releases on successful `main` pushes. `tools/source_bundle.py --version`
+sets the archive/package version without editing Cargo's application version.
+RPM accepts the same version through `--define "fidophir_version <version>"`;
+Debian uses its native changelog version. Source bundles carry the exact prepared
+submodule snapshot and registry sources, so neither package build fetches code.

@@ -1,8 +1,9 @@
 # Local Fedora 44 package using the locked, vendored source bundle.
 # This is not a claim of Fedora distribution package-policy approval.
 %global debug_package %{nil}
+%{!?fidophir_version:%global fidophir_version 0.1.0}
 Name:           fidophir
-Version:        0.1.0
+Version:        %{fidophir_version}
 Release:        1%{?dist}
 Summary:        Experimental minimal TPM-backed FIDO authenticator
 License:        Apache-2.0 AND MIT AND BSD-2-Clause AND BSD-3-Clause AND Unicode-3.0 AND (Apache-2.0 WITH LLVM-exception)

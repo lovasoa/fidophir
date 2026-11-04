@@ -1,5 +1,9 @@
 # Fidophir — experimental implementation
 
+[![Packages CI](https://github.com/lovasoa/fidophir/actions/workflows/packages.yml/badge.svg?branch=main)](https://github.com/lovasoa/fidophir/actions/workflows/packages.yml)
+
+[Download packages](https://github.com/lovasoa/fidophir/releases/latest)
+
 A single-owner Linux TPM authenticator for Firefox, with resident ES256 passkeys,
 the browser's ClientPIN UI, and fresh desktop approval through login1/polkit.
 No custom UI, SQLite, browser extension, network endpoint or runtime shell commands.
@@ -187,3 +191,32 @@ sudo systemctl enable fidophir.service
 
 Stopping/removing the service preserves `/var/lib/fidophir`. There is no automatic
 reset or migration tool; unknown state layouts fail closed.
+
+## Continuous packages
+
+Every push to `main` runs formatting, Clippy, core/host tests and independent FIDO/
+private-desktop tests, builds Fedora 44 x86_64 RPMs and a Debian 13 amd64 DEB, then
+publishes a GitHub Release for that commit. Pull requests build/test without release
+permissions. Builds are not canceled by newer commits. No additional repository
+secret is required: only the final publishing job receives `contents: write`.
+
+Versions are `0.1.0+git<RUN_NUMBER>.<12-character-commit>`. Releases use the full
+commit in their tag, include the offline source bundle, source RPM and SHA256SUMS,
+and publish the tested build artifacts without rebuilding. A completed older build
+cannot overwrite the current main commit's Latest marker. Re-running a workflow
+updates that commit's release rather than creating duplicates.
+
+Packages are GitHub Release downloads, with no hosted APT/YUM repository or signing
+key to maintain. For the latest successful main build:
+
+```sh
+gh release download --repo lovasoa/fidophir --pattern '*.deb'       # Debian 13
+# or:
+gh release download --repo lovasoa/fidophir --pattern '*x86_64.rpm' # Fedora 44
+```
+
+The Debian build uses the pinned official Rust 1.98.1/Trixie image and native Debian
+libraries. Rust is external to dpkg, so CI skips dpkg's Build-Depends resolution
+check after explicitly installing the native dependencies. The package build itself
+and its tests remain offline. The first complete CI run is the reference packaging
+validation; physical TPM/GNOME/Firefox acceptance remains separate.

@@ -1,0 +1,140 @@
+name: Test and publish packages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# No concurrency cancellation: every main commit gets its own tested release.
+jobs:
+  rpm:
+    name: Test and build Fedora 44 RPM
+    runs-on: ubuntu-latest
+    container: fedora:44
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Install Fedora build and simulator dependencies
+        run: >-
+          dnf install -y git rust cargo rustfmt clippy gcc make clang-devel
+          pkgconf-pkg-config glib2-devel tpm2-tss-devel systemd-rpm-macros
+          rpm-build redhat-rpm-config python3 swtpm tpm2-tools
+          python3-fido2 python3-gobject dbus-daemon
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Choose a unique, increasing package version
+        id: version
+        shell: bash
+        run: |
+          base=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          version="${base}+git${GITHUB_RUN_NUMBER}.${GITHUB_SHA:0:12}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Prepare pinned upstream sources and fetch locked dependencies
+        run: |
+          make prepare
+          cargo fetch --locked
+          cargo fetch --locked --manifest-path build/opensk/Cargo.toml
+      - name: Check formatting and lint
+        run: |
+          cargo fmt --check
+          cargo clippy --frozen --all-targets --features integration-tests -- -D warnings
+      - name: Run library and independent TPM/desktop integration tests
+        run: |
+          make test
+          cargo test --frozen --manifest-path build/opensk/Cargo.toml --features std --lib
+          make integration
+      - name: Build offline source bundle and RPM
+        shell: bash
+        run: |
+          python3 tools/source_bundle.py --version "$PACKAGE_VERSION" --output dist
+          mkdir -p rpmbuild/SOURCES
+          cp "dist/fidophir-${PACKAGE_VERSION}.tar.gz" rpmbuild/SOURCES/
+          rpmbuild -ba --define "_topdir $PWD/rpmbuild" --define "fidophir_version $PACKAGE_VERSION" packaging/fidophir.spec
+          cp rpmbuild/RPMS/x86_64/*.rpm rpmbuild/SRPMS/*.rpm dist/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages-rpm
+          if-no-files-found: error
+          path: |
+            dist/*.rpm
+            dist/*.tar.gz
+
+  deb:
+    name: Build Debian 13 DEB
+    needs: rpm
+    runs-on: ubuntu-latest
+    container: rust:1.98.1-trixie@sha256:a8a5f0a1e5fe7dfe1d352591e4a1c7dd2c08fd70475cae872cf3458ba0df0546
+    timeout-minutes: 30
+    env:
+      PACKAGE_VERSION: ${{ needs.rpm.outputs.version }}
+      DEBFULLNAME: Ophir Lojkine
+      DEBEMAIL: lovasoa@users.noreply.github.com
+    steps:
+      - name: Install Debian native build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends debhelper dpkg-dev devscripts libglib2.0-dev libtss2-dev libclang-dev python3
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: packages-rpm
+          path: incoming
+      - name: Build from the same offline source bundle
+        shell: bash
+        run: |
+          tar -xzf "incoming/fidophir-${PACKAGE_VERSION}.tar.gz"
+          cd "fidophir-${PACKAGE_VERSION}"
+          sha256sum --check SHA256SUMS > /dev/null
+          dch --newversion "$PACKAGE_VERSION" --distribution unstable "Build commit $GITHUB_SHA."
+          rustc --version
+          cargo --version
+          # Rust/Cargo are supplied by the pinned official image, not dpkg.
+          dpkg-buildpackage --build=binary --no-sign -d
+          mkdir -p ../dist
+          cp ../fidophir_*.deb ../dist/
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages-deb
+          if-no-files-found: error
+          path: dist/*.deb
+
+  publish:
+    name: Publish packages for this main commit
+    needs: [rpm, deb]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PACKAGE_VERSION: ${{ needs.rpm.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: packages-*
+          merge-multiple: true
+          path: packages
+      - name: Publish checksummed packages without rebuilding
+        shell: bash
+        run: |
+          (cd packages && sha256sum -- ./*.deb ./*.rpm ./*.tar.gz > SHA256SUMS)
+          tag="build-${GITHUB_SHA}"
+          printf 'Experimental fidophir build for commit `%s`.\n\nTargets: Debian 13 amd64 and Fedora 44 x86_64.\n\nInstallation does not start the service. Read the README and physical acceptance checklist before enrollment.\n' "$GITHUB_SHA" > release-notes.md
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" packages/* --clobber
+          else
+            gh release create "$tag" packages/* --target "$GITHUB_SHA" --title "fidophir $PACKAGE_VERSION" --notes-file release-notes.md --latest=false
+          fi
+          # A slower old build must not replace a newer main commit as Latest.
+          if [ "$(gh api "repos/${GH_REPO}/commits/main" --jq .sha)" = "$GITHUB_SHA" ]; then
+            gh release edit "$tag" --latest
+          fi
