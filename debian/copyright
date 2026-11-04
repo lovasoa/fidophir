@@ -1,0 +1,23 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: fidophir
+Source: https://github.com/lovasoa/fidophir
+
+Files: src/* tools/* patches/* packaging/* Makefile Cargo.toml
+Copyright: 2026 fidophir contributors
+License: Apache-2.0
+ The imported runtime source carries Apache-2.0 SPDX identifiers.
+ The full license is installed in /usr/share/licenses/fidophir/LICENSE-APACHE.
+ On Debian systems it is also in /usr/share/common-licenses/Apache-2.0.
+
+Files: LICENSE
+Copyright: 2026 Ophir LOJKINE
+License: MIT
+ The initial repository's MIT license is preserved verbatim and installed
+ in /usr/share/licenses/fidophir/LICENSE.
+
+Files: build/* vendor/crates/*
+Copyright: respective upstream authors
+License: individual-upstream-licenses
+ The source bundle's DEPENDENCIES.tsv records crate versions, checksums
+ and license expressions. Complete upstream license files are installed
+ in /usr/share/licenses/fidophir/third-party/.

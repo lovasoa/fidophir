@@ -73,3 +73,24 @@ The unit intentionally has no manually curated syscall-number filter. GLib/GIO, 
 No build-time internet, git branch dependencies or runtime downloads. Include exact vendor hashes, Cargo.lock, license files and a dependency inventory in the source package. Cargo sources compile into the host; native GLib/GIO and TPM2-TSS remain Fedora-managed shared libraries. Fedora native-library security updates and Rust source dependency updates consequently have different rebuild requirements.
 
 Upgrade preserves state and uses systemd RPM macros; restart invalidates transient authorizations and removes/recreates the device. Unsupported schema refuses startup. Remove/stop without deleting state. The service cannot reset the TPM or repair shared DA lockout. Administrator state deletion loses local credentials but cannot revoke copied parent blobs; revoke website registrations separately.
+
+## Debian 13 package
+
+`debian/` uses debhelper 13 for systemd lifecycle, sysusers integration and shared
+library dependencies. Build from the offline source bundle, with the declared
+native dependencies and Rust/Cargo >= 1.92:
+
+```sh
+dpkg-buildpackage --build=binary --no-sign
+```
+
+The build is offline and runs the host/core tests. Complete third-party licenses
+and dependency inventory are included. The device TCTI is a runtime dlopen plugin,
+so `libtss2-tcti-device0t64` and `tpm-udev` are explicit dependencies rather than
+relying solely on ELF dependency detection. Debian 13 is the supported DEB baseline.
+
+Debhelper does not start or enable this experimental service, including on upgrade.
+After configuring and accepting a new package, start it explicitly; restart it
+manually after Debian upgrades. The removal hook uses standard `deb-systemd-invoke`
+to stop the unit; state is preserved. Account creation uses `dh_installsysusers`;
+there are no PAM edits or desktop-user group changes.

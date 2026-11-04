@@ -145,7 +145,7 @@ the default package. Do not deploy a binary built with that feature.
 
 ## Installation and first physical acceptance
 
-Use the local RPM recipe in [packaging](packaging/README.md). The package does not
+Use the RPM or Debian 13 recipes in [packaging](packaging/README.md). The package does not
 start the service, configure an owner, or enroll a website credential. `make install
 DESTDIR=/absolute/staging/path` only stages files and has no activation hooks.
 
