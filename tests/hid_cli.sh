@@ -100,5 +100,5 @@ credential_id=$(awk 'NR == 1 {print $2}' "$test_dir/credentials")
 [[ -n $credential_id && $(wc -l <"$test_dir/credentials") == 1 ]]
 printf '8765\n' | setsid fido2-token -D -i "$credential_id" "$device"
 printf '8765\n' | setsid fido2-token -I -c "$device" >"$test_dir/metadata"
-grep -q 'existing rk\(s\): 0' "$test_dir/metadata"
+grep -Fxq 'existing rk(s): 0' "$test_dir/metadata"
 echo 'PASS: FIDO CLI PIN and credential management through UHID and hidraw'
