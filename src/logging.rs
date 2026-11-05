@@ -214,8 +214,12 @@ impl ResponseStatus {
     fn outcome(self) -> &'static str {
         match self {
             Self::Known(status) => outcome(status),
-            Self::Unknown(_) => "unrecognized response status; use the status code for diagnosis",
-            Self::Missing => "internal failure: security key returned an empty response",
+            Self::Unknown(_) => {
+                "unrecognized response status; start the browser operation again; if it repeats, report this status code, the application version and preceding journal errors after reviewing them for private information"
+            }
+            Self::Missing => {
+                "internal failure: security key returned an empty response; retry the browser operation; if it repeats, check the service journal and report this operation and preceding errors"
+            }
         }
     }
 }
@@ -234,37 +238,69 @@ fn outcome(status: Status) -> &'static str {
     use Status::*;
     match status {
         CTAP2_OK => "completed",
-        CTAP2_ERR_CREDENTIAL_EXCLUDED => "a matching passkey already exists",
-        CTAP2_ERR_OPERATION_DENIED => "approval was declined or unavailable",
-        CTAP2_ERR_KEY_STORE_FULL => "passkey storage is full; remove an unused passkey",
-        CTAP2_ERR_KEEPALIVE_CANCEL => "cancelled by the requesting application",
-        CTAP1_ERR_TIMEOUT | CTAP2_ERR_USER_ACTION_TIMEOUT | CTAP2_ERR_ACTION_TIMEOUT => {
-            "timed out waiting for completion"
+        CTAP2_ERR_CREDENTIAL_EXCLUDED => {
+            "a matching passkey already exists on this key; choose the website's sign-in option to use it, or add a different security key if you need another recovery method"
         }
-        CTAP2_ERR_NO_CREDENTIALS => "no matching passkey found",
-        CTAP2_ERR_PIN_INVALID => "incorrect PIN",
-        CTAP2_ERR_PIN_BLOCKED => "PIN blocked; stop retrying and check recovery options",
+        CTAP2_ERR_OPERATION_DENIED => {
+            "approval was declined or unavailable; unlock your local desktop, make sure authentication prompts can appear, then start the browser operation again and approve the prompt; see the preceding desktop approval message for the reason"
+        }
+        CTAP2_ERR_KEY_STORE_FULL => {
+            "no passkey slot is available (limit: 300); run `fido2-token -L -r /dev/fidophir-$(id -u)` to list websites, then follow README 'Manage your PIN and passkeys' to remove an unused passkey after confirming another sign-in method works; if fewer than 300 are listed, check preceding warnings for damaged credential directories that still occupy slots"
+        }
+        CTAP2_ERR_KEEPALIVE_CANCEL => {
+            "cancelled by the requesting application; if this was unintended, start the website's passkey operation again and keep its security key dialog open"
+        }
+        CTAP1_ERR_TIMEOUT | CTAP2_ERR_ACTION_TIMEOUT => {
+            "the request did not finish in time; start the website's passkey operation again; if this repeats, check preceding desktop approval, storage and TPM errors"
+        }
+        CTAP2_ERR_USER_ACTION_TIMEOUT => {
+            "approval did not finish in time; unlock your local desktop, check for a pending authentication prompt, then start the browser operation again and approve promptly"
+        }
+        CTAP2_ERR_NO_CREDENTIALS => {
+            "this key has no usable passkey matching the request; check that you are using the same computer and desktop account where it was created; sign in with another method and add a passkey using the website's security settings, choosing 'security key'; check preceding storage warnings if a saved passkey was skipped"
+        }
+        CTAP2_ERR_PIN_INVALID => {
+            "incorrect PIN; enter the Fidophir PIN you chose during setup, which is separate from your desktop login password; avoid repeated guesses because they can block both Fidophir and the TPM; if forgotten, use another sign-in method and follow README 'Reset a forgotten or blocked PIN' (deletes all local Fidophir passkeys)"
+        }
+        CTAP2_ERR_PIN_BLOCKED => {
+            "PIN blocked after too many failed attempts; stop guessing and confirm another sign-in or recovery method works for your websites before following README 'Reset a forgotten or blocked PIN'; that reset deletes all local Fidophir passkeys, which must then be enrolled again; it does not clear a TPM lockout, which must be allowed to expire"
+        }
         CTAP2_ERR_PIN_AUTH_INVALID => {
-            "PIN authorization is invalid or expired; enter the PIN again"
+            "the request's PIN authorization is invalid or no longer available, for example after a failed request or service restart; cancel the browser's security key dialog, start the operation again and enter the Fidophir PIN when asked; if this repeats with the correct PIN, update the browser and check the service journal for earlier errors"
         }
         CTAP2_ERR_PIN_AUTH_BLOCKED => {
-            "PIN attempts temporarily blocked; restart the service before retrying"
+            "PIN attempts are temporarily blocked after repeated failures; stop guessing; once you know the correct Fidophir PIN, run `sudo systemctl restart \"fidophir@$(id -u).service\"` and start the browser operation again; restarting does not clear the remaining attempt limit or a TPM lockout; if the PIN is forgotten, follow README 'Reset a forgotten or blocked PIN' (deletes all local Fidophir passkeys)"
         }
-        CTAP2_ERR_PIN_NOT_SET => "security key PIN has not been set up",
-        CTAP2_ERR_PUAT_REQUIRED => "PIN verification is required",
-        CTAP2_ERR_PIN_POLICY_VIOLATION => "PIN does not meet requirements",
-        CTAP2_ERR_PIN_TOKEN_EXPIRED => "PIN authorization expired; enter the PIN again",
-        CTAP1_ERR_INVALID_COMMAND
-        | CTAP2_ERR_UNSUPPORTED_ALGORITHM
-        | CTAP2_ERR_UNSUPPORTED_OPTION
-        | CTAP2_ERR_NOT_ALLOWED
-        | CTAP2_ERR_INVALID_SUBCOMMAND => {
-            "requested operation or option is not supported or allowed"
+        CTAP2_ERR_PIN_NOT_SET => {
+            "no Fidophir PIN has been configured for this desktop account; install fido2-tools, run `fido2-token -S /dev/fidophir-$(id -u)`, choose a PIN of at least four characters and approve the desktop prompt; then retry enrollment and choose 'security key' in the browser"
+        }
+        CTAP2_ERR_PUAT_REQUIRED => {
+            "this operation requires PIN verification; start the security key operation again and enter the Fidophir PIN when prompted; if you have not configured one, run `fido2-token -S /dev/fidophir-$(id -u)` first"
+        }
+        CTAP2_ERR_PIN_POLICY_VIOLATION => {
+            "the proposed PIN does not meet the key's requirements; choose a PIN of at least four characters, enter it consistently in both confirmation fields and retry PIN setup or change"
+        }
+        CTAP2_ERR_PIN_TOKEN_EXPIRED => {
+            "PIN authorization expired (it lasts at most 30 seconds); start the security key operation again and enter the Fidophir PIN when prompted"
+        }
+        CTAP1_ERR_INVALID_COMMAND | CTAP2_ERR_INVALID_SUBCOMMAND => {
+            "the application requested a command this key does not support; for website enrollment choose 'security key' in the browser; for PIN or passkey management use the fido2-token commands in README; if this repeats, report the application version and this status code"
+        }
+        CTAP2_ERR_UNSUPPORTED_ALGORITHM => {
+            "the requesting application asked for a signing algorithm this key does not support (Fidophir supports ES256); try another sign-in method or security key and report the incompatibility to the application or website"
+        }
+        CTAP2_ERR_UNSUPPORTED_OPTION | CTAP2_ERR_INVALID_OPTION => {
+            "the application requested an unsupported option; Fidophir requires a saved passkey and PIN verification; retry from the website's passkey settings and choose 'security key'; if the website requires other options, use another authenticator"
+        }
+        CTAP2_ERR_NOT_ALLOWED => {
+            "this operation is not allowed in the current key state; start the operation again using the README's PIN or passkey management commands; a browser or FIDO reset command cannot reset Fidophir: for a forgotten or blocked PIN, follow README 'Reset a forgotten or blocked PIN', which deletes all local Fidophir passkeys"
         }
         CTAP2_ERR_VENDOR_INTERNAL_ERROR | CTAP2_ERR_VENDOR_HARDWARE_FAILURE => {
-            "internal or hardware failure; check preceding errors"
+            "an internal or TPM operation failed; check preceding errors for the cause; if the key disappears, wait for the service to restart automatically and retry once it returns; if failures continue, run `systemctl status \"fidophir@$(id -u).service\"`, check that /dev/tpmrm0 and /dev/uhid exist, and follow README troubleshooting; restore damaged state only from a matching backup as directed by its error message"
         }
-        _ => "request failed; use the status code for diagnosis",
+        _ => {
+            "the security key could not complete the request; cancel the security key dialog and start the website operation again; if it repeats, run `journalctl -u \"fidophir@$(id -u).service\" -b --no-pager` and report the operation, status code, browser version and relevant preceding errors after reviewing the logs for private information"
+        }
     }
 }
 
@@ -280,7 +316,7 @@ mod tests {
             wrong_pin,
             ResponseStatus::Known(Status::CTAP2_ERR_PIN_INVALID)
         );
-        assert_eq!(wrong_pin.outcome(), "incorrect PIN");
+        assert!(wrong_pin.outcome().starts_with("incorrect PIN;"));
         assert_eq!(wrong_pin.level(), log::Level::Warn);
         let success = ResponseStatus::from_response(&[Status::CTAP2_OK as u8, 0xa0]);
         assert_eq!(success, ResponseStatus::Known(Status::CTAP2_OK));
