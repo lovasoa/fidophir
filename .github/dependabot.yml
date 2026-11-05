@@ -17,7 +17,3 @@ updates:
     ignore:
       - dependency-name: fedora
         update-types: [version-update:semver-major]
-  - package-ecosystem: gitsubmodule
-    directory: /
-    schedule:
-      interval: daily

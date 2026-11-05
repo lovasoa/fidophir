@@ -8,15 +8,16 @@
 //! candidate on acceptance or a guaranteed mismatch on rejection. OpenSK's own
 //! comparison and wrong-PIN/lockout handling remain intact.
 //!
-//! Contract with vendor/OpenSK/libraries/opensk/src:
+//! Contract with the OpenSK crate's source (follow its version in Cargo.toml):
 //! - `ctap/pin_protocol.rs`: ClientPIN v2 derives its key with zero-salt HKDF
 //!   and the label `CTAP2 AES key`; crypto outputs must never be modified.
 //! - `ctap/client_pin.rs::verify_pin_hash_enc`: durable retry charging precedes
 //!   `decrypt_pin_hash`, followed by an independent constant-time comparison.
 //!   The callback checks both the configured-PIN marker and charged counter.
 //! - `check_and_store_new_pin` may read that hash again for the same-PIN policy.
-//! - `ctap/token_state.rs`: USB tokens have a fixed, nonrolling 30-second limit.
-//!   Our hardware lease starts earlier, before TPM verification.
+//! - Successful token issuance must leave a TPM grant; successful SetPIN or
+//!   ChangePIN must call our persistent PIN setter. Completion asserts these
+//!   postconditions, so skipping the entire callback path also fails closed.
 //! - `api/crypto/ec_signing.rs`: wrapped hardware keys are supported, but key
 //!   generation/signing cannot return errors or receive an Env. A scoped backend
 //!   supplies the instance; hardware failures in those methods terminate safely.
@@ -25,9 +26,11 @@
 //! OpenSK's private token, so *every* protected command also needs a host lease,
 //! including metadata reads/deletes. OpenSK still checks MACs, permissions, RP
 //! binding and command sequencing; possession of our grant never replaces them.
+//! Our own fixed 30-second lease bounds access independently of token lifetime.
 //!
 //! On an OpenSK update, review these call sites and run the simulator contract
-//! tests: source equality alone cannot establish compatible callback semantics.
+//! tests. Runtime guards check callback order and successful completion; tests
+//! also exercise rejection, permissions and expiry across whole requests.
 //! Generic KeyStore errors deliberately lose the precise TPM status. They must
 //! never become wrong-PIN success or a usable grant. Unexpected adapter states
 //! terminate with secret-free diagnostics; restart loses authorization and may
@@ -110,13 +113,13 @@ impl Authenticator {
     }
 }
 
-/// What successful completion permits us to retain, not OpenSK permissions.
+/// Postconditions and authorization cleanup for successful commands.
 /// Keep this local to the synchronous request; it is not another token state.
 #[derive(Clone, Copy)]
 enum AuthorizationOnSuccess {
     Preserve,
     RetainNewPinGrant,
-    Clear,
+    RequirePinStored,
 }
 
 fn prepare_command(
@@ -142,7 +145,7 @@ fn prepare_command(
                     // public helper, including keepalives and cancellation.
                     check_user_presence(env, channel)?;
                 }
-                Ok(Clear)
+                Ok(RequirePinStored)
             }
             ChangePin | GetPinToken | GetPinUvAuthTokenUsingPinWithPermissions => {
                 // Never let an earlier grant stand in for this candidate.
@@ -152,7 +155,7 @@ fn prepare_command(
                 }
                 if parameters.sub_command == ChangePin {
                     env.set_approval_context(Some("change your security key PIN"), None);
-                    Ok(Clear)
+                    Ok(RequirePinStored)
                 } else {
                     Ok(RetainNewPinGrant)
                 }
@@ -197,12 +200,14 @@ fn finish_command(env: &mut LinuxEnv, prepared: Option<AuthorizationOnSuccess>, 
         Some(AuthorizationOnSuccess::RetainNewPinGrant) => {
             // A TPM grant is provisional inside ClientPIN. Only successful
             // token issuance permits the following command to use it.
-            if !env.backend.has_pin_authorization() {
-                crate::backend::adapter_invariant("token-issuance", "missing-tpm-authorization");
-            }
+            env.backend.assert_pin_was_verified();
         }
         Some(AuthorizationOnSuccess::Preserve) => (),
-        Some(AuthorizationOnSuccess::Clear) | None => env.backend.clear(),
+        Some(AuthorizationOnSuccess::RequirePinStored) => {
+            env.backend.assert_pin_was_stored();
+            env.backend.clear();
+        }
+        None => env.backend.clear(),
     }
     // Match OpenSK's command-entry timeout semantics: an admitted command may
     // finish a long desktop prompt, then its expired authorization is erased.

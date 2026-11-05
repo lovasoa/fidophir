@@ -31,8 +31,8 @@ type Task = Box<dyn FnOnce(&mut Tpm, &Store) + Send>;
 /// `Persist::pin_hash` reports configuration, never a stored verifier.
 pub(crate) const CONFIGURED_PIN_MARKER: [u8; 16] = [0; 16];
 
-/// Pinned OpenSK uses a fixed, nonrolling 30-second token lifetime. Starting our
-/// lease before TPM verification makes it expire no later than that token.
+/// Host policy, independent of OpenSK's token lifetime. Both must authorize a
+/// protected command; a longer-lived upstream token cannot extend this lease.
 pub const PIN_AUTHORIZATION_LIFETIME_MS: u64 = 30_000;
 
 struct Grant {
@@ -53,6 +53,8 @@ enum PinAccess {
         aes_key: Secret<[u8; 32]>,
     },
     Granted(Grant),
+    /// Completion witness only: PIN storage succeeded, and no grant survives it.
+    PinStored,
 }
 struct PinAttempt {
     encrypted_hash: Vec<u8>,
@@ -75,6 +77,7 @@ impl PinAccess {
             Self::AwaitingKey(_) => "awaiting-key",
             Self::ReadyToVerify { .. } => "ready-to-verify",
             Self::Granted(_) => "granted",
+            Self::PinStored => "pin-stored",
         }
     }
 }
@@ -121,13 +124,13 @@ impl Drop for Inner {
 pub struct Backend(Rc<Inner>);
 
 /// Only static diagnostics: never format requests, hashes, keys, or enum payloads.
+/// Release builds abort on panic; unit tests can check the same guard directly.
 #[track_caller]
 pub(crate) fn adapter_invariant(stage: &'static str, reason: &'static str) -> ! {
-    eprintln!(
+    panic!(
         "fidophir: fatal stage={stage} reason={reason} source={}",
         std::panic::Location::caller()
-    );
-    std::process::exit(1)
+    )
 }
 
 #[track_caller]
@@ -304,6 +307,20 @@ impl Backend {
         matches!(&*self.0.pin_access.borrow(), PinAccess::Granted(_))
     }
 
+    /// Catch successful token issuance that skipped the TPM verification path.
+    pub(crate) fn assert_pin_was_verified(&self) {
+        if !self.has_pin_authorization() {
+            adapter_invariant("token-issuance", "missing-tpm-authorization");
+        }
+    }
+
+    /// Catch upstream reporting SetPIN/ChangePIN success without calling us.
+    pub(crate) fn assert_pin_was_stored(&self) {
+        if !matches!(&*self.0.pin_access.borrow(), PinAccess::PinStored) {
+            adapter_invariant("pin-update", "missing-pin-storage");
+        }
+    }
+
     /// Call between commands only. OpenSK admits a command using its entry-time
     /// token validity, including commands that wait for desktop approval.
     pub fn expire_pin_authorization(&self, now_ms: u64) {
@@ -390,7 +407,10 @@ impl Persist for Backend {
         );
         self.clear();
         result?;
-        self.remove(opensk::api::persist::keys::FORCE_PIN_CHANGE)
+        self.remove(opensk::api::persist::keys::FORCE_PIN_CHANGE)?;
+        // Command completion consumes this witness. It carries no authorization.
+        *self.0.pin_access.borrow_mut() = PinAccess::PinStored;
+        Ok(())
     }
 }
 
@@ -675,55 +695,41 @@ mod tests {
     }
 
     #[test]
-    fn wrong_configured_pin_marker_fails_with_sanitized_diagnostic() {
-        const CHILD: &str = "FIDOPHIR_TEST_WRONG_PIN_MARKER";
-        if std::env::var_os(CHILD).is_some() {
-            let mut backend = backend_without_worker();
-            // Even an existing grant must not bypass the marker identity check.
-            *backend.0.pin_access.borrow_mut() = grant(100);
-            let _ = backend.decrypt_pin_hash(&[0xa5; 16]);
-            panic!("unexpected marker was accepted");
-        }
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "backend::tests::wrong_configured_pin_marker_fails_with_sanitized_diagnostic",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
-        assert!(!output.status.success());
-        let diagnostic = String::from_utf8_lossy(&output.stderr);
-        assert!(diagnostic.contains("stage=pin-hash-decryption"));
-        assert!(diagnostic.contains("reason=unexpected-configured-pin-marker"));
-        assert!(diagnostic.contains("source="));
-        assert!(!diagnostic.contains("[165,"));
+    #[should_panic(expected = "reason=unexpected-configured-pin-marker")]
+    fn wrong_configured_pin_marker_fails_even_with_a_grant() {
+        let mut backend = backend_without_worker();
+        *backend.0.pin_access.borrow_mut() = grant(100);
+        let _ = backend.decrypt_pin_hash(&[0xa5; 16]);
     }
+
     #[test]
-    fn uncharged_pin_attempt_terminates_before_candidate_verification() {
-        const CHILD: &str = "FIDOPHIR_TEST_UNCHARGED_PIN";
-        if std::env::var_os(CHILD).is_some() {
-            let pending = PinAttempt {
-                encrypted_hash: vec![0xa5; 32],
-                expected_failure_count: 1,
-            };
-            pending.assert_retry_was_charged(0);
-            panic!("uncharged PIN attempt was accepted");
+    #[should_panic(expected = "reason=retry-not-durably-charged")]
+    fn uncharged_pin_attempt_fails_before_candidate_verification() {
+        PinAttempt {
+            encrypted_hash: vec![0xa5; 32],
+            expected_failure_count: 1,
         }
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "backend::tests::uncharged_pin_attempt_terminates_before_candidate_verification",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
-        assert!(!output.status.success());
-        let diagnostic = String::from_utf8_lossy(&output.stderr);
-        assert!(diagnostic.contains("stage=pin-verification"));
-        assert!(diagnostic.contains("reason=retry-not-durably-charged"));
-        assert!(!diagnostic.contains("[165,"));
+        .assert_retry_was_charged(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "reason=missing-tpm-authorization")]
+    fn successful_token_requires_verification_callback() {
+        backend_without_worker().assert_pin_was_verified();
+    }
+
+    #[test]
+    #[should_panic(expected = "reason=missing-pin-storage")]
+    fn successful_setup_requires_storage_callback() {
+        backend_without_worker().assert_pin_was_stored();
+    }
+
+    #[test]
+    #[should_panic(expected = "reason=missing-pin-storage")]
+    fn successful_pin_change_requires_storage_after_verification() {
+        let backend = backend_without_worker();
+        // Verifying the old PIN cannot stand in for storing the new PIN.
+        *backend.0.pin_access.borrow_mut() = grant(100);
+        backend.assert_pin_was_stored();
     }
 }

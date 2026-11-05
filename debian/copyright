@@ -15,7 +15,7 @@ License: MIT
  The initial repository's MIT license is preserved verbatim and installed
  in /usr/share/licenses/fidophir/LICENSE.
 
-Files: build/* vendor/OpenSK/*
+Files: build/licenses/*
 Copyright: respective upstream authors
 License: individual-upstream-licenses
  DEPENDENCIES.tsv in the package documentation records crate versions

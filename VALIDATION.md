@@ -19,6 +19,12 @@ The v2 layout passed host unit tests and the existing OpenSK and packaging suite
 
 A release-build benchmark on this machine's Btrfs/NVMe filesystem used 300 synthetic credentials and the real OpenSK lookup code and worker. Across 400 cached lookups with roughly 800-byte and 4096-byte records, median full scans took 7.6–8.5 ms and the largest observed sample was 21.1 ms. Twenty trials requesting file-data cache eviction had medians of 11.5–13.0 ms; filesystem metadata remained cached. These are measurements, not worst-case latency bounds. TPM signing and desktop approval were outside the timed interval. Physical acceptance and power-loss qualification of v2 remain pending.
 
+## Published Cargo dependencies checks on 5 November 2026
+
+OpenSK `=0.1.0` and CBOR `=0.2.0` are downloaded from crates.io, without a submodule or source preparation. The published OpenSK crate records upstream commit `dccdb28178f7cb6979d4bf4d3e9d538f923da288`. Its PIN verification, HKDF and token-state paths were compared with the previously used Git revision; the production ClientPIN verification flow is unchanged. The published crate uses an older RNG trait, bridged to the same OS-seeded host generator.
+
+All 14 host tests and the release's 371 upstream tests passed, including new fatal-diagnostic checks for successful PIN commands with skipped verification or storage callbacks. Invariant guards panic (release builds abort), allowing direct unit tests without spawning processes that can transiently inherit other tests' filesystem locks. The full simulator protocol suite (including real 31-second expiry) and private D-Bus desktop suite passed, as did formatting, Clippy with warnings denied, release compilation, package activation policy checks and dependency license collection. Physical acceptance remains outstanding as described below.
+
 ## Unmodified OpenSK adapter checks on 5 November 2026
 
 The host's 11 unit tests and all 346 unmodified OpenSK library tests passed, as did formatting, Clippy with warnings denied, the source-equivalence check and an optimized production build. Adapter tests cover the configured-PIN marker, retry-charge invariant failure diagnostics, unchanged HKDF output/request isolation, same-PIN hash reuse without another TPM call, and grant expiry.

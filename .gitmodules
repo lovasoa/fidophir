@@ -1,3 +1,0 @@
-[submodule "opensk"]
-	path = vendor/OpenSK
-	url = https://github.com/google/OpenSK.git

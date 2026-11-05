@@ -5,28 +5,21 @@ BINARY ?= $(TARGET_DIR)/release/fidophir
 DESTDIR ?=
 PREFIX ?= /usr
 
-.PHONY: prepare check-opensk build test integration integration-hid install
-prepare:
-	sh tools/prepare-opensk.sh
-
-check-opensk:
-	python3 tools/check-opensk.py
-
-build: prepare
+.PHONY: build test integration integration-hid install
+build:
 	$(CARGO) build --locked --release --bin fidophir --target-dir $(TARGET_DIR)
 
-test: prepare
-	$(MAKE) check-opensk
+test:
 	bash tests/packaging.sh
 	$(CARGO) test --locked --lib --target-dir $(TARGET_DIR)
-	$(CARGO) test --locked --manifest-path build/opensk/Cargo.toml --no-default-features --features std --lib --target-dir $(TARGET_DIR)
+	python3 tools/test-opensk.py $(CARGO) $(abspath $(TARGET_DIR))
 
-integration: prepare
+integration:
 	$(CARGO) build --locked --bin fidophir-integration --features integration-tests --target-dir $(TARGET_DIR)
 	python3 tests/interop.py --binary $(abspath $(TARGET_DIR))/debug/fidophir-integration --expiry
 	python3 tests/desktop.py --binary $(abspath $(TARGET_DIR))/debug/fidophir-integration
 
-integration-hid: prepare
+integration-hid:
 	$(CARGO) build --locked --bin fidophir-integration --features integration-tests --target-dir $(TARGET_DIR)
 	bash tests/hid_cli.sh $(abspath $(TARGET_DIR))/debug/fidophir-integration
 
