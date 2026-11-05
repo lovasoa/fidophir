@@ -1,70 +1,80 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Adapts **unmodified**, pinned OpenSK to TPM-backed PIN verification.
+//! Connects a fixed version of unmodified OpenSK to Fidophir's PIN checks.
 //!
 //! Fidophir presents a virtual security key to the browser. OpenSK implements
-//! CTAP, the protocol the browser uses to talk to that key; Fidophir supplies
-//! the TPM-backed operations OpenSK needs. This adapter bridges the difference
-//! between OpenSK's PIN verification interface and the TPM's authorization.
+//! CTAP, the protocol the browser uses to talk to that key. Fidophir uses the
+//! computer's Trusted Platform Module (TPM), a security chip, to protect the
+//! passkey keys and check PINs. This module connects those two pieces.
 //!
 //! # The PIN verification trick
 //!
-//! OpenSK expects to decrypt a stored PIN verifier and compare it with the
-//! browser's candidate. The candidate is the first 16 bytes of SHA-256(PIN),
-//! encrypted by the browser for the current request. Fidophir instead supplies
-//! a configured-PIN marker and asks the TPM whether the candidate is correct;
-//! it stores no software PIN verifier on disk.
+//! When the user enters a PIN, the browser applies SHA-256, a repeatable
+//! one-way calculation, and takes the first 16 bytes of the result. We call
+//! these bytes the *candidate*. The browser encrypts the candidate before
+//! sending it to OpenSK.
+//!
+//! OpenSK normally decrypts the candidate and compares it with an expected
+//! value obtained from storage. Fidophir instead asks the TPM whether the
+//! candidate is correct. Fidophir stores no expected PIN value on disk: it gives
+//! OpenSK a fixed placeholder that only indicates that a PIN has been set.
 //!
 //! To get the candidate, Fidophir observes a key OpenSK already computes. The
-//! browser and authenticator agree on a temporary secret, then use HKDF, a
-//! key-derivation function, to make an AES encryption key for the PIN protocol.
-//! Our HKDF wrapper performs the normal calculation and copies the AES key
-//! only while a PIN request is pending. Fidophir uses that key to decrypt its
-//! copy of the request; OpenSK independently decrypts the same candidate.
+//! browser and OpenSK agree on a temporary secret, then use HKDF, a standard
+//! way to derive a key for a particular purpose, to make an AES encryption
+//! key. Fidophir performs the same HKDF calculation OpenSK would use and copies
+//! the resulting key while a PIN request is pending. It uses the key to decrypt
+//! its copy of the request; OpenSK independently decrypts the same candidate.
 //!
-//! When OpenSK asks to decrypt the stored verifier, Fidophir checks its
-//! candidate with the TPM and translates the answer into a comparison value:
+//! OpenSK asks Fidophir to decrypt the stored value. At that point Fidophir
+//! checks the candidate with the TPM and translates its answer into a value
+//! OpenSK can compare with its own copy of the candidate:
 //!
 //! - TPM accepts: return the candidate, so OpenSK's comparison succeeds.
 //! - TPM rejects: flip one bit of the candidate, so the comparison must fail.
 //!
 //! Flipping a bit guarantees a mismatch even if an attacker chooses the
-//! candidate. OpenSK still performs its own comparison and retry handling;
-//! well-formed incorrect PIN attempts also reach the TPM's dictionary-attack
-//! protection.
-//! The TPM checks the PIN-derived hash as an authorization value, not the
-//! original PIN. Hashing a short PIN does not make it hard to guess by itself.
+//! candidate. OpenSK still performs its own comparison and counts failed
+//! attempts. Valid requests with incorrect PINs also reach the TPM's protection
+//! against repeated guesses. The TPM checks the candidate as the value needed
+//! to use a protected object. SHA-256 alone does not make a short PIN hard to
+//! guess.
 //!
 //! # Compatibility and security contract
 //!
-//! Contract with the OpenSK crate's source (follow its version in Cargo.toml):
+//! These details depend on the OpenSK version in Cargo.toml:
 //! - `ctap/pin_protocol.rs`: ClientPIN v2 derives its key with zero-salt HKDF
-//!   and the label `CTAP2 AES key`; crypto outputs must never be modified.
-//! - `ctap/client_pin.rs::verify_pin_hash_enc`: durable retry charging precedes
-//!   `decrypt_pin_hash`, followed by an independent constant-time comparison.
-//!   The callback checks both the configured-PIN marker and charged counter.
-//! - `check_and_store_new_pin` may read that hash again for the same-PIN policy.
-//! - Successful token issuance must leave a TPM grant; successful SetPIN or
-//!   ChangePIN must call our persistent PIN setter. Completion asserts these
-//!   postconditions, so skipping the entire callback path also fails closed.
+//!   and the label `CTAP2 AES key`; the derived key must never be modified.
+//! - `ctap/client_pin.rs::verify_pin_hash_enc` records a failed attempt before
+//!   calling `decrypt_pin_hash`, then compares values without revealing how
+//!   many bytes matched. Fidophir checks the placeholder and recorded count.
+//! - `check_and_store_new_pin` may read the accepted candidate again to check
+//!   whether a replacement PIN is the same as the old one.
+//! - After a successful PIN check, OpenSK issues a token for later commands and
+//!   Fidophir keeps temporary TPM authorization, called a grant. Completion
+//!   checks that the grant exists, or that PIN storage happened for SetPIN or
+//!   ChangePIN. This catches success paths that skip the expected calls.
 //! - `api/crypto/ec_signing.rs`: wrapped hardware keys are supported, but key
-//!   generation/signing cannot return errors or receive an Env. A scoped backend
-//!   supplies the instance; hardware failures in those methods terminate safely.
+//!   generation/signing cannot return errors or receive an `Env`. A scoped
+//!   backend selects the current Fidophir instance; hardware failures in those
+//!   methods terminate the process safely.
 //!
 //! All requests must pass through this module. Clearing our grant cannot revoke
-//! OpenSK's private token, so *every* protected command also needs a host lease,
-//! including metadata reads/deletes. OpenSK still checks MACs, permissions, RP
-//! binding and command sequencing; possession of our grant never replaces them.
-//! Our own fixed 30-second lease bounds access independently of token lifetime.
+//! OpenSK's token, so *every* protected command also needs the grant, including
+//! metadata reads and deletes. OpenSK still checks message authentication codes
+//! (MACs), permissions, the website a token is bound to, and command order. Our
+//! grant expires at most 30 seconds after verification starts, independently of
+//! the token's lifetime.
 //!
-//! On an OpenSK update, review these call sites and run the simulator contract
-//! tests. Runtime guards check callback order and successful completion; tests
+//! When updating OpenSK, review these call sites and run the simulator contract
+//! tests. Runtime checks enforce call order and successful completion; tests
 //! also exercise rejection, permissions and expiry across whole requests.
-//! Generic KeyStore errors deliberately lose the precise TPM status. They must
+//! Generic KeyStore errors deliberately hide the precise TPM status. They must
 //! never become wrong-PIN success or a usable grant. Unexpected adapter states
-//! terminate with secret-free diagnostics; restart loses authorization and may
-//! interrupt the browser request. Cancellation observed inside an infallible
-//! key operation follows this same fail-stop path; earlier cancellation returns
-//! a normal CTAP error. No software signing fallback is permitted.
+//! terminate with diagnostics that contain no secrets; restart clears temporary
+//! authorization and may interrupt the browser request. Cancellation inside a
+//! key operation that cannot return errors also stops the process; earlier
+//! cancellation returns a normal CTAP error. There is no software signing
+//! fallback.
 pub(crate) mod scope;
 pub use scope::PinProtocolHkdf256;
 
