@@ -151,10 +151,10 @@ impl Store {
             // local edits to an existing reference file.
             const OLD: &str = "Damaged credentials are skipped, with the failing path reported in the journal.\nTheir slots stay reserved: new registrations never overwrite them. Restore the\nfiles with correct ownership/permissions, or remove the whole directory. No\ncredential cache needs rebuilding. Unrecognized filenames are ignored.";
             const NEW: &str = "Invalid credentials are renamed to e.g. credentials/00000.damaged-1/ and the\nfailing path is reported in the journal. Their numbered slots can be reused.\nTo restore one, stop the service, repair its files, and rename the directory to\nan unused five-digit slot (00000 through 00299). Keep the shared TPM parent.\nFilesystem and permission errors are reported without parking the credential.\nNo credential cache needs rebuilding. Unrecognized filenames are ignored.";
-            if let Ok(text) = std::str::from_utf8(&bytes) {
-                if text.contains(OLD) {
-                    store.write_file(&readme, text.replace(OLD, NEW).as_bytes())?;
-                }
+            if let Ok(text) = std::str::from_utf8(&bytes)
+                && text.contains(OLD)
+            {
+                store.write_file(&readme, text.replace(OLD, NEW).as_bytes())?;
             }
         }
         // Unpublished directories are created only by us. An interrupted exchange
