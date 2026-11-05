@@ -2,6 +2,9 @@
 name = "fidophir"
 version = "0.1.1"
 edition = "2024"
+description = "A TPM-backed virtual FIDO2 security key for Linux"
+homepage = "https://github.com/lovasoa/fidophir"
+repository = "https://github.com/lovasoa/fidophir"
 license = "Apache-2.0"
 rust-version = "1.92"
 
