@@ -12,6 +12,7 @@ rust-version = "1.92"
 integration-tests = ["opensk/std"]
 
 [dependencies]
+log = "0.4.35"
 # Review the adapter contract in src/opensk_adapter.rs before updating OpenSK.
 opensk = { version = "=0.1.0", default-features = false, features = ["software_crypto"] }
 sk-cbor = "=0.2.0"

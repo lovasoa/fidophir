@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Bounded, readable state. No credential cache or secondary index.
+use log::warn;
 mod credential;
 
 use crate::{Error, Result};
@@ -265,10 +266,7 @@ impl Store {
                 Ok(bytes) => Ok(Some(bytes)),
                 Err(error @ Error::InvalidCredential { .. }) => {
                     let parked = self.park_credential(&path, key)?;
-                    eprintln!(
-                        "fidophir: parked damaged credential at {}: {error}",
-                        parked.display()
-                    );
+                    warn!("parked damaged credential at {}: {error}", parked.display());
                     Ok(None)
                 }
                 Err(error) => Err(error),

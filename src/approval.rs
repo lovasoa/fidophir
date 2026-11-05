@@ -9,6 +9,7 @@ use glib::{
     Variant,
     variant::{ObjectPath, ToVariant},
 };
+use log::{info, warn};
 use opensk::{
     api::{
         connection::{RecvStatus, UsbEndpoint},
@@ -365,11 +366,17 @@ impl UserPresence for Approval {
             .clone();
         let uid = self.uid;
         let cancellation = id.clone();
+        info!(
+            "Desktop approval: checking for an active, unlocked local session and requesting approval"
+        );
         let task = glib::MainContext::default().spawn_local(async move {
             let answer = authorize(connection, uid, cancellation, operation, rp).await;
             if live.get() {
                 if let Err(error) = &answer {
-                    eprintln!("fidophir: desktop approval failed: {error}");
+                    warn!("desktop approval failed: {error}");
+                }
+                if answer.is_ok() {
+                    info!("Desktop approval: approved");
                 }
                 *output.borrow_mut() = Some(answer);
             }

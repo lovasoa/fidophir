@@ -6,6 +6,7 @@ use crate::{
     state::{PARENT, Store},
     tpm::{Blob, Kind, ParentRecord, Tpm},
 };
+use log::error;
 use opensk::{
     api::{
         crypto::{aes256::Aes256, rust_crypto::SoftwareAes256},
@@ -127,6 +128,10 @@ pub struct Backend(Rc<Inner>);
 /// Release builds abort on panic; unit tests can check the same guard directly.
 #[track_caller]
 pub(crate) fn adapter_invariant(stage: &'static str, reason: &'static str) -> ! {
+    error!(
+        "Security key stopped to protect its state; fatal stage={stage} reason={reason} source={}",
+        std::panic::Location::caller()
+    );
     panic!(
         "fidophir: fatal stage={stage} reason={reason} source={}",
         std::panic::Location::caller()
@@ -135,8 +140,8 @@ pub(crate) fn adapter_invariant(stage: &'static str, reason: &'static str) -> ! 
 
 #[track_caller]
 fn fatal_crypto(stage: &'static str, status: Status) -> ! {
-    eprintln!(
-        "fidophir: fatal stage={stage} status={} source={}",
+    error!(
+        "Security key stopped because a key operation failed; fatal stage={stage} status={} source={}",
         status as u8,
         std::panic::Location::caller()
     );
@@ -144,7 +149,7 @@ fn fatal_crypto(stage: &'static str, status: Status) -> ! {
 }
 
 fn fatal(message: impl std::fmt::Display) -> ! {
-    eprintln!("fidophir: {message}");
+    error!("{message}");
     std::process::exit(1)
 }
 
@@ -234,7 +239,7 @@ impl Backend {
                         }
                         Err(error) if durable => fatal(error),
                         Err(error) => {
-                            eprintln!("fidophir: operation failed: {error}");
+                            error!("operation failed: {error}");
                             *self.0.pin_access.borrow_mut() = PinAccess::None;
                             return Err(Status::CTAP2_ERR_VENDOR_HARDWARE_FAILURE);
                         }
@@ -481,8 +486,8 @@ impl Backend {
             }
             PinAccess::ReadyToVerify { attempt, aes_key } => (attempt, aes_key),
             other => {
-                eprintln!(
-                    "fidophir: fatal stage=pin-hash-decryption expected=ready-to-verify-or-granted actual={}",
+                error!(
+                    "fatal stage=pin-hash-decryption expected=ready-to-verify-or-granted actual={}",
                     other.phase()
                 );
                 adapter_invariant("pin-hash-decryption", "unexpected-pin-access-state")
@@ -713,10 +718,57 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "reason=unexpected-configured-pin-marker")]
-    fn wrong_configured_pin_marker_fails_even_with_a_grant() {
-        let mut backend = backend_without_worker();
-        *backend.0.pin_access.borrow_mut() = grant(100);
-        let _ = backend.decrypt_pin_hash(&[0xa5; 16]);
+    fn wrong_configured_pin_marker_fails_with_sanitized_diagnostic() {
+        const CHILD: &str = "FIDOPHIR_TEST_WRONG_PIN_MARKER";
+        if std::env::var_os(CHILD).is_some() {
+            crate::logging::init();
+            let mut backend = backend_without_worker();
+            // Even an existing grant must not bypass the marker identity check.
+            *backend.0.pin_access.borrow_mut() = grant(100);
+            let _ = backend.decrypt_pin_hash(&[0xa5; 16]);
+            panic!("unexpected marker was accepted");
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "backend::tests::wrong_configured_pin_marker_fails_with_sanitized_diagnostic",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostic.contains("stage=pin-hash-decryption"));
+        assert!(diagnostic.contains("reason=unexpected-configured-pin-marker"));
+        assert!(diagnostic.contains("source="));
+        assert!(!diagnostic.contains("[165,"));
+    }
+    #[test]
+    fn uncharged_pin_attempt_terminates_before_candidate_verification() {
+        const CHILD: &str = "FIDOPHIR_TEST_UNCHARGED_PIN";
+        if std::env::var_os(CHILD).is_some() {
+            crate::logging::init();
+            let pending = PinAttempt {
+                encrypted_hash: vec![0xa5; 32],
+                expected_failure_count: 1,
+            };
+            pending.assert_retry_was_charged(0);
+            panic!("uncharged PIN attempt was accepted");
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "backend::tests::uncharged_pin_attempt_terminates_before_candidate_verification",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostic.contains("stage=pin-verification"));
+        assert!(diagnostic.contains("reason=retry-not-durably-charged"));
+        assert!(!diagnostic.contains("[165,"));
     }
 }
