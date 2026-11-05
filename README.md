@@ -112,7 +112,7 @@ Resetting deletes **all your Fidophir passkeys** on this computer. You will need
    sudo systemctl stop "fidophir@$(id -u).service" && sudo rm -rf -- "/var/lib/fidophir-users/$(id -u)/v2"
    ```
 
-3. Start the service again, then set a new PIN and add passkeys as described above:
+2. Start the service again, then set a new PIN and add passkeys as described above:
 
    ```sh
    sudo systemctl start "fidophir@$(id -u).service"
@@ -131,14 +131,11 @@ sudo dnf install rust cargo gcc make clang-libs clang-devel pkgconf-pkg-config g
 Rust and Cargo 1.92 or newer are required. From a Git checkout:
 
 ```sh
-cargo fetch --locked
 make build
 make test
 ```
 
-OpenSK and CBOR come from crates.io at exact versions; `Cargo.lock` fixes their transitive dependencies. Cargo downloads missing dependencies. `make test` also runs the downloaded OpenSK release's upstream tests using its bundled lockfile; after one successful run, the same checks can run with `CARGO_NET_OFFLINE=true`.
-
-`make integration` additionally needs `swtpm`, `tpm2-tools`, `python3-fido2`, `python3-gobject` and `dbus-daemon`. It uses disposable simulators and a private D-Bus, not the host TPM or real accounts. Its test-only binary is not for deployment. `make integration-hid` additionally exercises the FIDO command-line tools through UHID and hidraw; it needs `swtpm`, `fido2-tools` and access to `/dev/uhid` and the generated hidraw device. See [validation](VALIDATION.md) for what the tests cover and what remains untested.
+See [validation](VALIDATION.md) for simulator tests and hardware acceptance checks.
 
 ## Related projects
 

@@ -2,42 +2,28 @@
 
 **Physical acceptance is partially complete.** Simulator tests do not show that Fidophir works with a real TPM, Firefox, GNOME or a particular website. Keep an independent account recovery method and use disposable accounts for testing.
 
-## Evidence so far
+## Automated checks
 
-On 4 November 2026, tests on Fedora 44 covered the following:
+`make test` exercises storage durability and recovery, unsafe-file rejection, HID framing and cancellation, PIN-hash access, authorization expiry and package activation policy.
 
-- OpenSK and host unit tests passed, including storage, locking, HID framing and cancellation. Clippy passed with warnings treated as errors.
-- An independent FIDO client and disposable software TPM exercised PIN setup and failures, key creation and signatures, token expiry, credential management, restart and PIN changes. The tests confirmed that an old parent backup still works with its old PIN.
-- The desktop adapter was tested against simulated login1 and polkit services on a private D-Bus. These tests covered denial, cancellation, unsuitable sessions and late responses; they did not use a real GNOME agent or PAM.
-- An offline source bundle and RPM were built and inspected. The local RPM build did not verify its declared build dependencies in a clean Fedora build environment.
+`make integration` runs an independent Python FIDO client against a disposable software TPM and a private D-Bus. It needs `swtpm`, `tpm2-tools`, `python3-fido2`, `python3-gobject` and `dbus-daemon`. It covers:
 
-No independent audit, FIDO certification, power-loss qualification or resistance to a privileged attacker has been established. The simulator tests did not change the physical TPM or enroll website credentials; the separate physical checks below did.
+- PIN setup/change, malformed candidates, persistent retry limits and TPM dictionary-attack accounting.
+- Independently verified registration and signing, token permissions, RP binding, expiry and stale-token rejection after host revocation.
+- Credential management, corrupt-record isolation, repair, restart recovery and signing failures.
+- Fresh desktop approval, denial, unsuitable sessions, cancellation and late replies.
 
-## Storage v2 checks on 5 November 2026
+For the full-store case, run `python3 tests/interop.py --binary target/debug/fidophir-integration --capacity`. The simulator handles synthetic credentials only. Its crash-recovery fixture clears transient handles in that private simulator to model the kernel TPM resource manager; it does not touch the host TPM.
 
-The v2 layout passed host unit tests and the existing OpenSK and packaging suites. Disposable TPM integration tests exercised PIN changes, 300 credentials and full-store rejection, malformed metadata isolation across restart, immediate repair, administrator deletion across restart, cryptographically damaged signing blobs, missing shared-parent recovery, PIN retry persistence and token expiry. The private D-Bus desktop regression tests also passed. Clippy passed with warnings treated as errors. These checks used disposable state and did not access the hardware TPM.
+`make integration-hid` checks registration, signing and credential management through UHID, hidraw and the FIDO command-line tools. It needs `swtpm`, `fido2-tools` and access to `/dev/uhid` and the generated hidraw device.
 
-A release-build benchmark on this machine's Btrfs/NVMe filesystem used 300 synthetic credentials and the real OpenSK lookup code and worker. Across 400 cached lookups with roughly 800-byte and 4096-byte records, median full scans took 7.6–8.5 ms and the largest observed sample was 21.1 ms. Twenty trials requesting file-data cache eviction had medians of 11.5–13.0 ms; filesystem metadata remained cached. These are measurements, not worst-case latency bounds. TPM signing and desktop approval were outside the timed interval. Physical acceptance and power-loss qualification of v2 remain pending.
+Package lifecycle fixtures check installation, logout, upgrade/removal and repeated crash recovery in disposable Fedora and Debian systemd containers. They use dummy workers, so they do not validate device access, TPM hardware or the production sandbox; see [packaging](packaging/README.md#lifecycle-tests).
 
-## Published Cargo dependencies checks on 5 November 2026
+## Physical coverage
 
-OpenSK `=0.1.0` and CBOR `=0.2.0` are downloaded from crates.io, without a submodule or source preparation. The published OpenSK crate records upstream commit `dccdb28178f7cb6979d4bf4d3e9d538f923da288`. Its PIN verification, HKDF and token-state paths were compared with the previously used Git revision; the production ClientPIN verification flow is unchanged. The published crate uses an older RNG trait, bridged to the same OS-seeded host generator.
+Fedora 44 with GNOME and Firefox 159 has been tested for PIN setup with desktop approval, registration and authentication on webauthn.io, PIN persistence across package upgrades, device ownership, and package removal. Browser discovery after an upgrade required a full browser restart.
 
-All 14 host tests and the release's 371 upstream tests passed, including new fatal-diagnostic checks for successful PIN commands with skipped verification or storage callbacks. Invariant guards panic (release builds abort), allowing direct unit tests without spawning processes that can transiently inherit other tests' filesystem locks. The full simulator protocol suite (including real 31-second expiry) and private D-Bus desktop suite passed, as did formatting, Clippy with warnings denied, release compilation, package activation policy checks and dependency license collection. Physical acceptance remains outstanding as described below.
-
-## Unmodified OpenSK adapter checks on 5 November 2026
-
-The host's 11 unit tests and all 346 unmodified OpenSK library tests passed, as did formatting, Clippy with warnings denied, the source-equivalence check and an optimized production build. Adapter tests cover the configured-PIN marker, retry-charge invariant failure diagnostics, unchanged HKDF output/request isolation, same-PIN hash reuse without another TPM call, and grant expiry.
-
-The independent FIDO client and disposable software TPM passed the full suite with real 31-second expiry and 300-credential capacity. Added cases cover malformed encrypted candidates without TPM attempts, stale-token metadata reads/deletes after host revocation, tokens after restart, sanitized fail-stop signing errors, and recovery of healthy/repaired credentials. The private D-Bus desktop suite also passed. The raw TCP simulator needs transient-handle cleanup after an intentional crash; the fixture performs it only in that private simulator to model production's kernel TPM resource manager.
-
-Real package lifecycle fixtures passed in disposable rootless Fedora 44 and Debian 13 systemd containers, including four consecutive crashes followed by automatic recovery under the production restart policy. These fixtures replace the authenticator worker, so they do not establish hardware or browser recovery. Physical UHID rediscovery, kernel TPM resource cleanup, and cancellation during an infallible signing callback still need acceptance testing. A cancellation reaching those infallible methods can restart the service.
-
-## Physical checks on 4 November 2026
-
-On this Fedora 44 GNOME desktop with Firefox 159, a locally built RPM was installed, upgraded, removed and reinstalled. Removal stopped the service, removed its virtual device and restored `/dev/uhid` to root:root mode 0600. State and the service account were retained. The generated hidraw device was owned by the desktop UID, group root, mode 0600 without an extra ACL. An independent FIDO client read its GetInfo response.
-
-The tester successfully set a PIN with real desktop approval after the process-subject polkit fix. GetInfo confirmed the PIN was configured and polkit did not restart. A full browser restart restored discovery after a package upgrade. The tester also confirmed successful registration and authentication on webauthn.io in Firefox using a disposable test username. Polkit’s restart count stayed unchanged after the fix. A subsequent package upgrade preserved the configured PIN, as confirmed by GetInfo. Reboot, multiple users, Google/GitHub compatibility and the remaining checks below are still pending.
+Reboot, multiple users, Google/GitHub compatibility, UHID rediscovery after crashes, kernel TPM resource cleanup, and signing-time cancellation remain unverified. Cancellation during an infallible signing callback can restart the service. No independent audit, FIDO certification, power-loss qualification or resistance to a privileged attacker has been established.
 
 ## Remaining physical acceptance
 
@@ -49,5 +35,3 @@ A tester with administrator access should perform these checks on a Fedora 44 GN
 4. Use `fido2-token -S /dev/fidophir-$(id -u)` to set the PIN and `fido2-token -C /dev/fidophir-$(id -u)` to change it. Verify a fresh desktop approval for initial setup, enrollment and sign-in. Test denial, cancellation, no agent, locking the screen, switching sessions and delayed responses. Record whether password and fingerprint approval work under the existing host policy.
 5. Enroll and use passkeys on disposable Google and GitHub accounts. Test multiple accounts, selection, cancellation, wrong PIN, PIN changes, old tokens, service restart and reboot. Confirm this Firefox version works with ClientPIN v2 and required user verification.
 6. Under load, check that TPM latency and HID keepalives do not cause incorrect responses or permit canceled operations. Verify the device disappears on stop and reappears on restart, credentials survive an upgrade, and authorization expires. Power-loss testing requires separate disposable state.
-
-Package lifecycle fixtures have also been exercised with real systemd in rootless Fedora 44 and Debian 13 containers. They validate template UID propagation, systemd-managed state directories, account creation, upgrade/removal through the aggregate target, and policy/mask denial. Their dummy workers do not validate device access, TPM hardware or the production sandbox; see `tests/systemd_lifecycle.py`.

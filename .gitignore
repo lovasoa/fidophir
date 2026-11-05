@@ -1,11 +1,9 @@
 /target/
-/.cargo-home/
 /dist/
 __pycache__/
 *.pyc
 /build/
 /rpmbuild/
-/artifacts/
 
 /debian/.debhelper/
 /debian/fidophir/

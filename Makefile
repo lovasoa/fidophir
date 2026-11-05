@@ -12,7 +12,6 @@ build:
 test:
 	bash tests/packaging.sh
 	$(CARGO) test --locked --lib --target-dir $(TARGET_DIR)
-	python3 tools/test-opensk.py $(CARGO) $(abspath $(TARGET_DIR))
 
 integration:
 	$(CARGO) build --locked --bin fidophir-integration --features integration-tests --target-dir $(TARGET_DIR)

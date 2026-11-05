@@ -19,7 +19,7 @@ For a DEB, install the build dependencies listed in `debian/control` and run fro
 dpkg-buildpackage --build=binary --no-sign
 ```
 
-Package builds fetch locked Cargo dependencies as needed. OpenSK and CBOR are exact crates.io dependencies, verified by Cargo against the archive checksums in `Cargo.lock`; no submodule initialization or source preparation is needed. `make test` also runs the downloaded OpenSK release's upstream tests with its bundled lockfile. RPM uses a plain archive of tracked sources; Debian builds directly from the checkout. There is no vendored dependency bundle. `tools/licenses.py` collects dependency license notices from Cargo's downloaded sources for installation in both packages. Native GLib/GIO and TPM2-TSS libraries remain distribution-managed. `make install DESTDIR=/absolute/staging/path` stages files only.
+To inspect the installation layout without installing a package, run `make install DESTDIR=/absolute/staging/path` after building.
 
 ## Installation behavior
 

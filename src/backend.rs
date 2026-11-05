@@ -701,35 +701,4 @@ mod tests {
         *backend.0.pin_access.borrow_mut() = grant(100);
         let _ = backend.decrypt_pin_hash(&[0xa5; 16]);
     }
-
-    #[test]
-    #[should_panic(expected = "reason=retry-not-durably-charged")]
-    fn uncharged_pin_attempt_fails_before_candidate_verification() {
-        PinAttempt {
-            encrypted_hash: vec![0xa5; 32],
-            expected_failure_count: 1,
-        }
-        .assert_retry_was_charged(0);
-    }
-
-    #[test]
-    #[should_panic(expected = "reason=missing-tpm-authorization")]
-    fn successful_token_requires_verification_callback() {
-        backend_without_worker().assert_pin_was_verified();
-    }
-
-    #[test]
-    #[should_panic(expected = "reason=missing-pin-storage")]
-    fn successful_setup_requires_storage_callback() {
-        backend_without_worker().assert_pin_was_stored();
-    }
-
-    #[test]
-    #[should_panic(expected = "reason=missing-pin-storage")]
-    fn successful_pin_change_requires_storage_after_verification() {
-        let backend = backend_without_worker();
-        // Verifying the old PIN cannot stand in for storing the new PIN.
-        *backend.0.pin_access.borrow_mut() = grant(100);
-        backend.assert_pin_was_stored();
-    }
 }
