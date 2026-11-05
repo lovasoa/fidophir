@@ -5,7 +5,7 @@ Source: https://github.com/lovasoa/fidophir
 Files: src/* tools/* packaging/* Makefile Cargo.toml
 Copyright: 2026 fidophir contributors
 License: Apache-2.0
- The imported runtime source carries Apache-2.0 SPDX identifiers.
+ The source files carry Apache-2.0 SPDX identifiers.
  The full license is installed in /usr/share/licenses/fidophir/LICENSE-APACHE.
  On Debian systems it is also in /usr/share/common-licenses/Apache-2.0.
 
@@ -15,7 +15,7 @@ License: MIT
  The initial repository's MIT license is preserved verbatim and installed
  in /usr/share/licenses/fidophir/LICENSE.
 
-Files: build/* vendor/OpenSK/*
+Files: build/licenses/*
 Copyright: respective upstream authors
 License: individual-upstream-licenses
  DEPENDENCIES.tsv in the package documentation records crate versions

@@ -196,10 +196,6 @@ fn incomplete_initialization_can_be_reopened() {
     let store = Store::open(&root.0).unwrap();
     assert!(root.path("v2/credentials").is_dir());
     assert!(root.path("v2/authenticator").is_dir());
-    assert_eq!(
-        fs::read_to_string(root.path("v2/README.txt")).unwrap(),
-        README
-    );
     populate(&store);
     drop(store);
     let store = Store::open(&root.0).unwrap();

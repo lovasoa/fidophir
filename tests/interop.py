@@ -296,7 +296,7 @@ def main():
                 assert len(credentials) == 2
                 print("PASS: standard credential-management enumeration",flush=True)
 
-                # Unpatched OpenSK retains its old token after a failed PIN
+                # OpenSK retains its old token after a failed PIN
                 # attempt. Clearing only the TPM grant would leave metadata
                 # operations usable: they do not sign or load a TPM key.
                 expect(CtapError.ERR.PIN_INVALID, lambda: authorize(

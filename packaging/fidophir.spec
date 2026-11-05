@@ -12,7 +12,6 @@ BuildRequires:  cargo >= 1.92
 BuildRequires:  rust >= 1.92
 BuildRequires:  gcc
 BuildRequires:  make
-BuildRequires:  git
 BuildRequires:  python3
 BuildRequires:  clang-libs
 BuildRequires:  clang-devel

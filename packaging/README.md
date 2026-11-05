@@ -4,17 +4,11 @@ The repository builds Fedora 44 RPM and Debian 13 DEB packages. These are experi
 
 ## Build packages
 
-Start from a checkout with the pinned submodule initialized:
-
-```sh
-git submodule update --init
-```
-
 For an RPM, install Fedora's `rpm-build` and the `BuildRequires` in `fidophir.spec`, then run:
 
 ```sh
 mkdir -p dist/rpmbuild/SOURCES
-git ls-files --recurse-submodules -z | tar --null --files-from=- \
+git ls-files -z | tar --null --files-from=- \
   --transform 's,^,fidophir-0.1.1/,' -czf dist/rpmbuild/SOURCES/fidophir-0.1.1.tar.gz
 rpmbuild -ba --define "_topdir $(pwd)/dist/rpmbuild" packaging/fidophir.spec
 ```
@@ -25,7 +19,7 @@ For a DEB, install the build dependencies listed in `debian/control` and run fro
 dpkg-buildpackage --build=binary --no-sign
 ```
 
-Package builds fetch locked Cargo dependencies as needed. `make prepare` copies the pinned OpenSK and CBOR libraries without source changes. Only the standalone OpenSK crate's `Cargo.lock` is replaced by `locks/opensk.Cargo.lock`; `make check-opensk` compares every prepared source file with upstream and checks that lockfile. CI and `make test` run this check before compilation. RPM uses a plain archive of tracked sources, including the pinned OpenSK submodule; Debian builds directly from the checkout. There is no vendored dependency bundle. `tools/licenses.py` collects dependency license notices from Cargo's downloaded sources for installation in both packages. Native GLib/GIO and TPM2-TSS libraries remain distribution-managed. `make install DESTDIR=/absolute/staging/path` stages files only.
+To inspect the installation layout without installing a package, run `make install DESTDIR=/absolute/staging/path` after building.
 
 ## Installation behavior
 
@@ -51,4 +45,4 @@ A restart closes the UHID descriptor and briefly disconnects the virtual key, th
 
 The packages workflow tests and builds both formats from the same commit on pushes to `main` and publishes successful builds on [GitHub Releases](https://github.com/lovasoa/fidophir/releases). Pull requests build without release permissions. Download assets are named `fidophir.rpm` and `fidophir.deb`; their labels and package metadata include a version derived from the commit history. A source RPM and package checksums accompany the binaries. Simulator and package tests do not replace physical acceptance.
 
-Dependency updates are ordinary pull requests: Dependabot handles actions, build images and the OpenSK submodule; the scheduled Cargo updater uses `peter-evans/create-pull-request` for compatible and major updates, including OpenSK's separate lockfile. Repository Actions settings must allow GitHub Actions to create pull requests. Cargo PRs explicitly dispatch package checks because the default `GITHUB_TOKEN` does not trigger `pull_request` workflows. Updates stay open for review and merge through the repository's normal rules; there is no privileged merge workflow or direct automated update of `main`. Merging through the GitHub UI triggers the normal main build and publication.
+Dependency updates are ordinary pull requests: Dependabot handles actions and build images; the scheduled Cargo updater uses `peter-evans/create-pull-request` for compatible and major updates to `Cargo.toml` and `Cargo.lock`. Its major-update track also proposes updates to exact versions, including OpenSK and CBOR; an OpenSK version change requires the adapter contract review documented in `src/opensk_adapter.rs` and the contract tests. Repository Actions settings must allow GitHub Actions to create pull requests. Cargo PRs explicitly dispatch package checks because the default `GITHUB_TOKEN` does not trigger `pull_request` workflows. Updates stay open for review and merge through the repository's normal rules; there is no privileged merge workflow or direct automated update of `main`. Merging through the GitHub UI triggers the normal main build and publication.

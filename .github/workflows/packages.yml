@@ -50,7 +50,6 @@ jobs:
         with:
           ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
-          submodules: true
           fetch-depth: 0
       - name: Choose a unique, increasing package version
         id: version
@@ -65,12 +64,8 @@ jobs:
           version="${base}+git${commit_count}.${SOURCE_SHA:0:12}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
-      - name: Prepare pinned upstream sources and fetch locked dependencies
-        run: |
-          make prepare
-          make check-opensk
-          cargo fetch --locked
-          cargo fetch --locked --manifest-path build/opensk/Cargo.toml
+      - name: Fetch locked Cargo dependencies
+        run: cargo fetch --locked
       - name: Check formatting and lint
         run: |
           cargo fmt --check
@@ -78,13 +73,12 @@ jobs:
       - name: Run library and independent TPM/desktop integration tests
         run: |
           make test
-          cargo test --frozen --manifest-path build/opensk/Cargo.toml --features std --lib
           make integration
       - name: Build RPM from tracked sources
         shell: bash
         run: |
           mkdir -p rpmbuild/SOURCES dist
-          git ls-files --recurse-submodules -z | tar --null --files-from=- \
+          git ls-files -z | tar --null --files-from=- \
             --transform "s,^,fidophir-${PACKAGE_VERSION}/," \
             -czf "rpmbuild/SOURCES/fidophir-${PACKAGE_VERSION}.tar.gz"
           rpmbuild -ba --define "_topdir $PWD/rpmbuild" --define "fidophir_version $PACKAGE_VERSION" packaging/fidophir.spec
@@ -115,7 +109,6 @@ jobs:
         with:
           ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
-          submodules: true
       - name: Build DEB from the same commit
         shell: bash
         run: |
@@ -141,7 +134,6 @@ jobs:
         with:
           ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
-          submodules: true
       - name: Install build and simulator dependencies
         run: |
           sudo apt-get update
@@ -149,9 +141,7 @@ jobs:
           rustup toolchain install 1.98.1 --profile minimal
           rustup default 1.98.1
       - name: Build test authenticator
-        run: |
-          make prepare
-          cargo build --locked --bin fidophir-integration --features integration-tests
+        run: cargo build --locked --bin fidophir-integration --features integration-tests
       - name: Permit the runner to use the test device
         run: |
           sudo modprobe uhid

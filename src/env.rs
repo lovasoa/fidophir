@@ -12,6 +12,7 @@ use opensk::{
         connection::{HidConnection, RecvStatus, UsbEndpoint},
         crypto::{Crypto, rust_crypto::*},
         customization::{CustomizationImpl, DEFAULT_CUSTOMIZATION},
+        rng::rand_core::{CryptoRng, Error as RngError, RngCore},
     },
     ctap::{
         data_formats::CredentialProtectionPolicy,
@@ -20,25 +21,29 @@ use opensk::{
     env::Env,
 };
 use rand::{
-    SeedableRng, TryCryptoRng, TryRng,
+    Rng, SeedableRng,
     rngs::{StdRng, SysRng},
 };
-use std::{convert::Infallible, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
+// OpenSK 0.1.0 uses rand_core 0.6. Adapt its traits to our OS-seeded generator.
 pub struct HostRng(StdRng);
-impl TryRng for HostRng {
-    type Error = Infallible;
-    fn try_next_u32(&mut self) -> std::result::Result<u32, Infallible> {
-        self.0.try_next_u32()
+impl RngCore for HostRng {
+    fn next_u32(&mut self) -> u32 {
+        self.0.next_u32()
     }
-    fn try_next_u64(&mut self) -> std::result::Result<u64, Infallible> {
-        self.0.try_next_u64()
+    fn next_u64(&mut self) -> u64 {
+        self.0.next_u64()
     }
-    fn try_fill_bytes(&mut self, out: &mut [u8]) -> std::result::Result<(), Infallible> {
-        self.0.try_fill_bytes(out)
+    fn fill_bytes(&mut self, out: &mut [u8]) {
+        self.0.fill_bytes(out);
+    }
+    fn try_fill_bytes(&mut self, out: &mut [u8]) -> std::result::Result<(), RngError> {
+        self.fill_bytes(out);
+        Ok(())
     }
 }
-impl TryCryptoRng for HostRng {}
+impl CryptoRng for HostRng {}
 impl opensk::api::rng::Rng for HostRng {}
 
 pub struct HostCrypto;

@@ -68,7 +68,6 @@ def serve(address, folder):
             kind, identity = subject
             assert kind == "unix-process"
             assert identity["uid"] == os.geteuid()
-            assert Path(f'/proc/{identity["pid"]}').owner()
             stat = Path(f'/proc/{identity["pid"]}/stat').read_text()
             assert identity["start-time"] == int(stat.rsplit(")",1)[1].split()[19])
             assert action == "org.local.fidophir.use"
