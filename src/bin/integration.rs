@@ -58,9 +58,7 @@ fn main() {
     let mut state = CtapState::new(&mut env);
     let mut hid = MainHid::default();
     if args[3] == "uhid" {
-        io.borrow_mut()
-            .publish(u32::MAX)
-            .expect("test UHID device");
+        io.borrow_mut().publish(u32::MAX).expect("test UHID device");
         eprintln!("test UHID ready");
         loop {
             dispatch_desktop();

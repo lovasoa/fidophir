@@ -70,6 +70,14 @@ done
 if [[ -z $device || ! -r $device || ! -w $device || ! -L /dev/fidophir-4294967295 ]] ||
    [[ $(readlink -f /dev/fidophir-4294967295) != "$device" ]]; then
     echo 'Fidophir test device was not available or accessible' >&2
+    cat "$test_dir/device.log" >&2
+    for entry in /sys/class/hidraw/hidraw*; do
+        [[ -f $entry/device/uevent ]] || continue
+        cat "$entry/device/uevent" >&2
+        ls -l "/dev/${entry##*/}" >&2 || true
+        udevadm info -q property -n "/dev/${entry##*/}" >&2 || true
+    done
+    ls -l /dev/fidophir-* >&2 || true
     exit 1
 fi
 device=/dev/fidophir-4294967295
