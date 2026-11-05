@@ -95,8 +95,12 @@ impl Authenticator {
         let backend = env.backend.clone();
         scope::with_backend(&backend, || {
             env.set_approval_context(None, None);
-            let prepared = Command::deserialize(bytes)
-                .and_then(|command| prepare_command(env, &command, channel));
+            let command = Command::deserialize(bytes);
+            let quiet = command
+                .as_ref()
+                .is_ok_and(|c| crate::logging::operation(Some(c)).is_none());
+            let interaction = crate::logging::Interaction::begin(command.as_ref().ok());
+            let prepared = command.and_then(|command| prepare_command(env, &command, channel));
             let mut response = match &prepared {
                 Ok(_) => self.state.process_command(env, bytes, channel),
                 Err(status) => vec![*status as u8],
@@ -105,6 +109,7 @@ impl Authenticator {
                 response = vec![Status::CTAP2_ERR_KEEPALIVE_CANCEL as u8];
             }
             finish_command(env, prepared.ok(), &response);
+            interaction.finish(response.first().copied().unwrap_or(0xf2), quiet);
             response
         })
     }

@@ -123,25 +123,31 @@ pub struct Backend(Rc<Inner>);
 /// Only static diagnostics: never format requests, hashes, keys, or enum payloads.
 #[track_caller]
 pub(crate) fn adapter_invariant(stage: &'static str, reason: &'static str) -> ! {
-    eprintln!(
-        "fidophir: fatal stage={stage} reason={reason} source={}",
-        std::panic::Location::caller()
+    crate::logging::write(
+        crate::logging::Level::Error,
+        format_args!(
+            "Security key stopped to protect its state; fatal stage={stage} reason={reason} source={}",
+            std::panic::Location::caller()
+        ),
     );
     std::process::exit(1)
 }
 
 #[track_caller]
 fn fatal_crypto(stage: &'static str, status: Status) -> ! {
-    eprintln!(
-        "fidophir: fatal stage={stage} status={} source={}",
-        status as u8,
-        std::panic::Location::caller()
+    crate::logging::write(
+        crate::logging::Level::Error,
+        format_args!(
+            "Security key stopped because a key operation failed; fatal stage={stage} status={} source={}",
+            status as u8,
+            std::panic::Location::caller()
+        ),
     );
     std::process::exit(1)
 }
 
 fn fatal(message: impl std::fmt::Display) -> ! {
-    eprintln!("fidophir: {message}");
+    crate::logging::write(crate::logging::Level::Error, format_args!("{message}"));
     std::process::exit(1)
 }
 
@@ -231,7 +237,10 @@ impl Backend {
                         }
                         Err(error) if durable => fatal(error),
                         Err(error) => {
-                            eprintln!("fidophir: operation failed: {error}");
+                            crate::logging::write(
+                                crate::logging::Level::Error,
+                                format_args!("operation failed: {error}"),
+                            );
                             *self.0.pin_access.borrow_mut() = PinAccess::None;
                             return Err(Status::CTAP2_ERR_VENDOR_HARDWARE_FAILURE);
                         }
@@ -443,9 +452,12 @@ impl Backend {
             }
             PinAccess::ReadyToVerify { attempt, aes_key } => (attempt, aes_key),
             other => {
-                eprintln!(
-                    "fidophir: fatal stage=pin-hash-decryption expected=ready-to-verify-or-granted actual={}",
-                    other.phase()
+                crate::logging::write(
+                    crate::logging::Level::Error,
+                    format_args!(
+                        "fatal stage=pin-hash-decryption expected=ready-to-verify-or-granted actual={}",
+                        other.phase()
+                    ),
                 );
                 adapter_invariant("pin-hash-decryption", "unexpected-pin-access-state")
             }

@@ -256,7 +256,10 @@ impl Store {
                 }
                 Err(error) => {
                     if self.reported.borrow_mut().insert(key) {
-                        eprintln!("fidophir: skipping credential: {error}");
+                        crate::logging::write(
+                            crate::logging::Level::Warning,
+                            format_args!("skipping credential: {error}"),
+                        );
                     }
                     Ok(None)
                 }

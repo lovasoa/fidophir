@@ -25,10 +25,10 @@ from fido2 import cbor
 
 
 class Pipe(CtapDevice):
-    def __init__(self, binary, root, tcti, decision="allow", capture_stderr=False):
+    def __init__(self, binary, root, tcti, decision="allow", capture_stderr=False, stderr_file=None):
         self.proc = subprocess.Popen([str(binary), str(root), tcti, decision],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=subprocess.PIPE if capture_stderr else None)
+                                     stderr=stderr_file if stderr_file is not None else (subprocess.PIPE if capture_stderr else None))
 
     @property
     def capabilities(self):
@@ -143,6 +143,39 @@ def tpm_dictionary_attack_counter(tcti):
     return int(counter[1], 0)
 
 
+def check_logging(binary, base, tcti):
+    """Exercise real request logging and reject identifying input in diagnostics."""
+    state = base / "logging-records"
+    state.mkdir(mode=0o700)
+    with tempfile.TemporaryFile() as output:
+        pipe = Pipe(binary, state, tcti, stderr_file=output)
+        try:
+            ctap = Ctap2(pipe)
+            ctap.get_info()
+            assert output.tell() == 0, "discovery should be quiet"
+            pin = "private-pin-984237"
+            ClientPin(ctap).set_pin(pin)
+            credential = register(ctap, pin, b"private-user-handle-58921", "private-site.example")
+            sign(ctap, pin, credential, "private-site.example")
+            expect(CtapError.ERR.PIN_INVALID, lambda: authorize(
+                ctap, "private-wrong-pin-7139", ClientPin.PERMISSION.GET_ASSERTION, "private-site.example"))
+        finally:
+            pipe.close()
+        output.seek(0)
+        log = output.read().decode()
+    for phrase in ("Create passkey: completed", "Sign with passkey: completed",
+                   "Set up security key PIN: completed", "incorrect PIN", "duration_ms=", "<4>", "<6>"):
+        assert phrase in log, (phrase, log)
+    for secret in (pin, "private-user-handle-58921", "private-site.example", "private-wrong-pin-7139",
+                   "Test account", credential.credential_id.hex()):
+        assert secret not in log, "private request data appeared in logs"
+    starts = re.findall(r"request=(\d+) .*: started", log)
+    assert len(starts) == len(set(starts)), "request numbers were reused"
+    for request in starts:
+        assert re.search(rf"request={request} .*status=0x[0-9a-f]{{2}} duration_ms=\d+", log), log
+    print("PASS: readable interaction results, priorities, correlation and private data exclusion", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, required=True)
@@ -170,6 +203,7 @@ def main():
                 # OpenSK's independent persistent eight-attempt limit across restarts.
                 subprocess.run(["tpm2_dictionarylockout","-T",tcti,"--setup-parameters",
                                 "--max-tries","64","--recovery-time","1000","--lockout-recovery-time","1000"],check=True)
+                check_logging(args.binary, base, tcti)
                 pipe = Pipe(args.binary, state, tcti)
                 ctap = Ctap2(pipe)
                 info = ctap.get_info()

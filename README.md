@@ -77,6 +77,7 @@ Keep another sign-in or recovery method for each account. Fidophir passkeys stay
 ### Troubleshooting
 
 - **View logs:** Run `journalctl -u "fidophir@$(id -u).service" -b` to see logs since boot. Add `-f` to follow new messages as they arrive.
+- **Understand key activity:** The journal records passkey creation, signing, PIN operations, passkey management and desktop approvals. Each request has a number (unique within one daemon process), its result, a protocol status code and elapsed time. A completed signing request means the key produced a response; it does not confirm that the website accepted a sign-in. Routine discovery and PIN helper queries are silent unless they fail. Website names, account details, credential identifiers, PINs, tokens and key material are excluded. To see full lines, add `--no-pager`; to show warnings and errors, add `-p warning`. Logs reveal when the key was used, so review them before sharing.
 - **No security key appears:** Make sure your desktop session is local, active and unlocked. Check the service status with `systemctl status "fidophir@$(id -u).service"`.
 - **Device path missing after an upgrade:** Run `sudo systemctl restart "fidophir@$(id -u).service"` to recreate it.
 - **The service fails to start:** Read its error messages with `journalctl -u "fidophir@$(id -u).service" -b`. Check that the computer has a working TPM and that `/dev/tpmrm0` and `/dev/uhid` exist.

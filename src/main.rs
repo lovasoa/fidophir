@@ -38,7 +38,10 @@ fn run() -> Result<()> {
     let mut env = LinuxEnv::new(root, io.clone(), uid)?;
     let mut authenticator = Authenticator::new(&mut env);
     io.borrow_mut().publish(uid)?;
-    eprintln!("fidophir: authenticator ready");
+    fidophir::logging::write(
+        fidophir::logging::Level::Info,
+        format_args!("authenticator ready"),
+    );
     loop {
         dispatch_desktop();
         env.backend
@@ -60,7 +63,7 @@ fn run() -> Result<()> {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("fidophir: {error}");
+        fidophir::logging::write(fidophir::logging::Level::Error, format_args!("{error}"));
         std::process::exit(1);
     }
 }

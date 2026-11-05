@@ -53,6 +53,8 @@ TasksMax=32
 StandardInput=null
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=fidophir
+SyslogLevelPrefix=yes
 
 [Install]
 WantedBy=user@.service

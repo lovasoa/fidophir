@@ -5,6 +5,7 @@ pub mod approval;
 pub mod backend;
 pub mod env;
 pub mod io;
+pub mod logging;
 pub mod opensk_adapter;
 pub mod state;
 pub mod tpm;
