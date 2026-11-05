@@ -33,6 +33,7 @@ fn exchange(
 }
 
 fn main() {
+    fidophir::logging::init();
     nix::sys::prctl::set_dumpable(false).expect("nondumpable test process");
     let args: Vec<String> = std::env::args().collect();
     assert_eq!(

@@ -6,6 +6,7 @@ use crate::{
     state::{PARENT, Store},
     tpm::{Blob, Kind, ParentRecord, Tpm},
 };
+use log::error;
 use opensk::{
     api::{
         crypto::{aes256::Aes256, rust_crypto::SoftwareAes256},
@@ -123,31 +124,25 @@ pub struct Backend(Rc<Inner>);
 /// Only static diagnostics: never format requests, hashes, keys, or enum payloads.
 #[track_caller]
 pub(crate) fn adapter_invariant(stage: &'static str, reason: &'static str) -> ! {
-    crate::logging::write(
-        crate::logging::Level::Error,
-        format_args!(
-            "Security key stopped to protect its state; fatal stage={stage} reason={reason} source={}",
-            std::panic::Location::caller()
-        ),
+    error!(
+        "Security key stopped to protect its state; fatal stage={stage} reason={reason} source={}",
+        std::panic::Location::caller()
     );
     std::process::exit(1)
 }
 
 #[track_caller]
 fn fatal_crypto(stage: &'static str, status: Status) -> ! {
-    crate::logging::write(
-        crate::logging::Level::Error,
-        format_args!(
-            "Security key stopped because a key operation failed; fatal stage={stage} status={} source={}",
-            status as u8,
-            std::panic::Location::caller()
-        ),
+    error!(
+        "Security key stopped because a key operation failed; fatal stage={stage} status={} source={}",
+        status as u8,
+        std::panic::Location::caller()
     );
     std::process::exit(1)
 }
 
 fn fatal(message: impl std::fmt::Display) -> ! {
-    crate::logging::write(crate::logging::Level::Error, format_args!("{message}"));
+    error!("{message}");
     std::process::exit(1)
 }
 
@@ -237,10 +232,7 @@ impl Backend {
                         }
                         Err(error) if durable => fatal(error),
                         Err(error) => {
-                            crate::logging::write(
-                                crate::logging::Level::Error,
-                                format_args!("operation failed: {error}"),
-                            );
+                            error!("operation failed: {error}");
                             *self.0.pin_access.borrow_mut() = PinAccess::None;
                             return Err(Status::CTAP2_ERR_VENDOR_HARDWARE_FAILURE);
                         }
@@ -452,12 +444,9 @@ impl Backend {
             }
             PinAccess::ReadyToVerify { attempt, aes_key } => (attempt, aes_key),
             other => {
-                crate::logging::write(
-                    crate::logging::Level::Error,
-                    format_args!(
-                        "fatal stage=pin-hash-decryption expected=ready-to-verify-or-granted actual={}",
-                        other.phase()
-                    ),
+                error!(
+                    "fatal stage=pin-hash-decryption expected=ready-to-verify-or-granted actual={}",
+                    other.phase()
                 );
                 adapter_invariant("pin-hash-decryption", "unexpected-pin-access-state")
             }
@@ -690,6 +679,7 @@ mod tests {
     fn wrong_configured_pin_marker_fails_with_sanitized_diagnostic() {
         const CHILD: &str = "FIDOPHIR_TEST_WRONG_PIN_MARKER";
         if std::env::var_os(CHILD).is_some() {
+            crate::logging::init();
             let mut backend = backend_without_worker();
             // Even an existing grant must not bypass the marker identity check.
             *backend.0.pin_access.borrow_mut() = grant(100);
@@ -716,6 +706,7 @@ mod tests {
     fn uncharged_pin_attempt_terminates_before_candidate_verification() {
         const CHILD: &str = "FIDOPHIR_TEST_UNCHARGED_PIN";
         if std::env::var_os(CHILD).is_some() {
+            crate::logging::init();
             let pending = PinAttempt {
                 encrypted_hash: vec![0xa5; 32],
                 expected_failure_count: 1,

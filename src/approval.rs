@@ -9,6 +9,7 @@ use glib::{
     Variant,
     variant::{ObjectPath, ToVariant},
 };
+use log::{info, warn};
 use opensk::{
     api::{
         connection::{RecvStatus, UsbEndpoint},
@@ -365,26 +366,17 @@ impl UserPresence for Approval {
             .clone();
         let uid = self.uid;
         let cancellation = id.clone();
-        crate::logging::write(
-            crate::logging::Level::Info,
-            format_args!(
-                "Desktop approval: checking for an active, unlocked local session and requesting approval"
-            ),
+        info!(
+            "Desktop approval: checking for an active, unlocked local session and requesting approval"
         );
         let task = glib::MainContext::default().spawn_local(async move {
             let answer = authorize(connection, uid, cancellation, operation, rp).await;
             if live.get() {
                 if let Err(error) = &answer {
-                    crate::logging::write(
-                        crate::logging::Level::Warning,
-                        format_args!("desktop approval failed: {error}"),
-                    );
+                    warn!("desktop approval failed: {error}");
                 }
                 if answer.is_ok() {
-                    crate::logging::write(
-                        crate::logging::Level::Info,
-                        format_args!("Desktop approval: approved"),
-                    );
+                    info!("Desktop approval: approved");
                 }
                 *output.borrow_mut() = Some(answer);
             }

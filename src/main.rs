@@ -5,6 +5,7 @@ use fidophir::{
     io::{Io, dispatch_desktop},
     opensk_adapter::Authenticator,
 };
+use log::{error, info};
 use std::{path::PathBuf, time::Duration};
 
 fn run() -> Result<()> {
@@ -38,10 +39,7 @@ fn run() -> Result<()> {
     let mut env = LinuxEnv::new(root, io.clone(), uid)?;
     let mut authenticator = Authenticator::new(&mut env);
     io.borrow_mut().publish(uid)?;
-    fidophir::logging::write(
-        fidophir::logging::Level::Info,
-        format_args!("authenticator ready"),
-    );
+    info!("authenticator ready");
     loop {
         dispatch_desktop();
         env.backend
@@ -62,8 +60,9 @@ fn run() -> Result<()> {
 }
 
 fn main() {
+    fidophir::logging::init();
     if let Err(error) = run() {
-        fidophir::logging::write(fidophir::logging::Level::Error, format_args!("{error}"));
+        error!("{error}");
         std::process::exit(1);
     }
 }

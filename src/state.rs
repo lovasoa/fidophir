@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Bounded, readable state. No credential cache or secondary index.
+use log::warn;
 mod credential;
 
 use crate::{Error, Result};
@@ -256,10 +257,7 @@ impl Store {
                 }
                 Err(error) => {
                     if self.reported.borrow_mut().insert(key) {
-                        crate::logging::write(
-                            crate::logging::Level::Warning,
-                            format_args!("skipping credential: {error}"),
-                        );
+                        warn!("skipping credential: {error}");
                     }
                     Ok(None)
                 }

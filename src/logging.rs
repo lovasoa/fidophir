@@ -15,17 +15,35 @@ use std::{
 thread_local! { static REQUEST: Cell<Option<u64>> = const { Cell::new(None) }; }
 static NEXT: AtomicU64 = AtomicU64::new(1);
 
-pub enum Level {
-    Info,
-    Warning,
-    Error,
+struct JournalLogger;
+
+pub fn init() {
+    static LOGGER: JournalLogger = JournalLogger;
+    if log::set_logger(&LOGGER).is_ok() {
+        log::set_max_level(log::LevelFilter::Info);
+    }
 }
 
-pub fn write(level: Level, message: fmt::Arguments<'_>) {
+impl log::Log for JournalLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        // Dependencies may log protocol payloads; only accept our reviewed messages.
+        metadata.level() <= log::Level::Info
+            && (metadata.target() == "fidophir" || metadata.target().starts_with("fidophir::"))
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            write(record.level(), *record.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
+fn write(level: log::Level, message: fmt::Arguments<'_>) {
     let priority = match level {
-        Level::Info => 6,
-        Level::Warning => 4,
-        Level::Error => 3,
+        log::Level::Error => 3,
+        log::Level::Warn => 4,
+        log::Level::Info => 6,
+        log::Level::Debug | log::Level::Trace => 7,
     };
     // Ignore logging failures: a closed journal must not panic during key use.
     let mut stderr = std::io::stderr().lock();
@@ -47,7 +65,7 @@ impl Interaction {
         let name = operation(command);
         REQUEST.with(|request| request.set(Some(NEXT.fetch_add(1, Ordering::Relaxed))));
         if let Some(name) = name {
-            write(Level::Info, format_args!("{name}: started"));
+            log::info!("{name}: started");
         }
         Self {
             name: name.unwrap_or("Security key request"),
@@ -57,18 +75,16 @@ impl Interaction {
     pub fn finish(self, status: u8, quiet: bool) {
         if !quiet || status != 0 {
             let level = if status == 0 || matches!(status, 0x27 | 0x2d | 0x2f) {
-                Level::Info
+                log::Level::Info
             } else {
-                Level::Warning
+                log::Level::Warn
             };
-            write(
+            log::log!(
                 level,
-                format_args!(
-                    "{}: {}; status=0x{status:02x} duration_ms={}",
-                    self.name,
-                    outcome(status),
-                    self.start.elapsed().as_millis()
-                ),
+                "{}: {}; status=0x{status:02x} duration_ms={}",
+                self.name,
+                outcome(status),
+                self.start.elapsed().as_millis(),
             );
         }
     }
@@ -129,5 +145,25 @@ fn outcome(status: u8) -> &'static str {
         }
         0xf2 | 0xf3 => "internal or hardware failure; check preceding errors",
         _ => "request failed; use the status code for diagnosis",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use log::Log;
+
+    #[test]
+    fn dependency_messages_are_excluded_from_the_journal() {
+        let metadata = |target| {
+            log::Metadata::builder()
+                .level(log::Level::Info)
+                .target(target)
+                .build()
+        };
+        assert!(JournalLogger.enabled(&metadata("fidophir::approval")));
+        assert!(JournalLogger.enabled(&metadata("fidophir")));
+        assert!(!JournalLogger.enabled(&metadata("tss_esapi::context")));
+        assert!(!JournalLogger.enabled(&metadata("fidophir_other")));
     }
 }
