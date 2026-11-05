@@ -76,6 +76,7 @@ Keep another sign-in or recovery method for each account. Fidophir passkeys stay
 
 ### Troubleshooting
 
+- **View logs:** Run `journalctl -u "fidophir@$(id -u).service" -b` to see logs since boot. Add `-f` to follow new messages as they arrive.
 - **No security key appears:** Make sure your desktop session is local, active and unlocked. Check the service status with `systemctl status "fidophir@$(id -u).service"`.
 - **Device path missing after an upgrade:** Run `sudo systemctl restart "fidophir@$(id -u).service"` to recreate it.
 - **The service fails to start:** Read its error messages with `journalctl -u "fidophir@$(id -u).service" -b`. Check that the computer has a working TPM and that `/dev/tpmrm0` and `/dev/uhid` exist.

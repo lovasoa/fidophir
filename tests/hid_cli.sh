@@ -92,7 +92,17 @@ dGVzdA==
 PARAMETERS
 printf '1234\n' | setsid fido2-cred -M -r -v \
     -i "$test_dir/credential-input" -o "$test_dir/credential-output" "$device"
+fido2-cred -V -i "$test_dir/credential-output" -o "$test_dir/verified-credential"
+tail -n +2 "$test_dir/verified-credential" >"$test_dir/public-key.pem"
 printf '1234\n8765\n8765\n' | setsid fido2-token -C "$device"
+cat >"$test_dir/assertion-input" <<'PARAMETERS'
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+example.test
+PARAMETERS
+printf '8765\n' | setsid fido2-assert -G -r -v \
+    -i "$test_dir/assertion-input" -o "$test_dir/assertion-output" "$device"
+fido2-assert -V "$test_dir/public-key.pem" es256 -p -v \
+    -i "$test_dir/assertion-output"
 printf '8765\n' | setsid fido2-token -L -r "$device" >"$test_dir/rps"
 grep -q 'example\.test' "$test_dir/rps"
 printf '8765\n' | setsid fido2-token -L -k example.test "$device" >"$test_dir/credentials"
@@ -101,4 +111,4 @@ credential_id=$(awk 'NR == 1 {print $2}' "$test_dir/credentials")
 printf '8765\n' | setsid fido2-token -D -i "$credential_id" "$device"
 printf '8765\n' | setsid fido2-token -I -c "$device" >"$test_dir/metadata"
 grep -Fxq 'existing rk(s): 0' "$test_dir/metadata"
-echo 'PASS: FIDO CLI PIN and credential management through UHID and hidraw'
+echo 'PASS: FIDO CLI PIN, verified registration and signing, and credential management through UHID and hidraw'
