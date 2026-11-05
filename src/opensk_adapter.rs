@@ -3,41 +3,45 @@
 //!
 //! Fidophir presents a virtual security key to the browser. OpenSK implements
 //! CTAP, the protocol the browser uses to talk to that key. Fidophir uses the
-//! computer's Trusted Platform Module (TPM), a security chip, to protect the
+//! computer's Trusted Platform Module (TPM), a security component, to protect the
 //! passkey keys and check PINs. This module connects those two pieces.
 //!
 //! # The PIN verification trick
 //!
-//! When the user enters a PIN, the browser applies SHA-256, a repeatable
-//! one-way calculation, and takes the first 16 bytes of the result. We call
-//! these bytes the *candidate*. The browser encrypts the candidate before
-//! sending it to OpenSK. OpenSK then decrypts it using a key it shares with the
-//! browser, recovering the candidate for the PIN check.
+//! OpenSK normally checks a PIN by comparing two values: a value derived from
+//! the PIN just entered, and an expected value recovered from storage. It asks
+//! its host to provide the expected value. Fidophir instead wants the TPM to
+//! decide whether the entered PIN is correct, without storing an expected PIN
+//! value in software. It adapts OpenSK's request as follows:
 //!
-//! OpenSK normally decrypts the candidate and compares it with an expected
-//! value obtained from storage. Fidophir instead asks the TPM whether the
-//! candidate is correct. Fidophir stores no expected PIN value on disk: it gives
-//! OpenSK a fixed placeholder that only indicates that a PIN has been set.
+//! 1. The browser applies SHA-256, a repeatable one-way calculation, to the
+//!    entered PIN and takes the first 16 bytes. We call these bytes the *PIN
+//!    candidate*. The browser derives an encryption key from a secret it shares
+//!    with OpenSK, encrypts the PIN candidate and sends the encrypted value to
+//!    the virtual security key. Fidophir keeps a copy of that encrypted value
+//!    and passes the request to OpenSK.
+//! 2. OpenSK derives the same encryption key independently. It asks Fidophir to
+//!    perform HKDF, the standard calculation that derives the key from the
+//!    shared secret. Fidophir returns the unchanged key to OpenSK and keeps a
+//!    temporary copy for the pending PIN request.
+//! 3. OpenSK asks Fidophir for the stored PIN value. Because Fidophir has no
+//!    such value, it returns a fixed placeholder indicating that a PIN is set.
+//!    OpenSK then asks Fidophir to decrypt that placeholder, expecting the
+//!    result to be the value against which it should check the PIN candidate.
+//! 4. Fidophir uses its copy of the encryption key to decrypt its copy of the
+//!    browser's encrypted value, recovering the PIN candidate. It presents the
+//!    PIN candidate to the TPM as the authorization needed to use a protected
+//!    object. If the TPM accepts, Fidophir returns the PIN candidate to OpenSK.
+//!    If the TPM rejects it, Fidophir flips one bit of the PIN candidate and
+//!    returns the altered value instead.
+//! 5. OpenSK decrypts the browser's encrypted value itself. It compares the
+//!    resulting PIN candidate with the value Fidophir returned in step 4. The
+//!    values match when the TPM accepted the PIN and differ when it rejected
+//!    it, so OpenSK follows its normal success or wrong-PIN path.
 //!
-//! To get the candidate, Fidophir observes a key OpenSK already computes. The
-//! browser and OpenSK agree on a temporary secret, then use HKDF, a standard
-//! way to derive a key for a particular purpose, to make an AES encryption
-//! key. Fidophir performs the same HKDF calculation OpenSK would use and copies
-//! the resulting key while a PIN request is pending. It uses the key to decrypt
-//! its copy of the request; OpenSK independently decrypts the same candidate.
-//!
-//! OpenSK asks Fidophir to decrypt the stored value. At that point Fidophir
-//! checks the candidate with the TPM and translates its answer into a value
-//! OpenSK can compare with its own copy of the candidate:
-//!
-//! - TPM accepts: return the candidate, so OpenSK's comparison succeeds.
-//! - TPM rejects: flip one bit of the candidate, so the comparison must fail.
-//!
-//! Flipping a bit guarantees a mismatch even if an attacker chooses the
-//! candidate. OpenSK still performs its own comparison and counts failed
-//! attempts. Valid requests with incorrect PINs also reach the TPM's protection
-//! against repeated guesses. The TPM checks the candidate as the value needed
-//! to use a protected object. SHA-256 alone does not make a short PIN hard to
+//! Flipping a bit guarantees a mismatch even if an attacker chooses the PIN
+//! candidate. Valid requests with incorrect PINs reach the TPM's protection
+//! against repeated guesses. SHA-256 alone does not make a short PIN hard to
 //! guess.
 //!
 //! # Compatibility and security contract
@@ -45,9 +49,10 @@
 //! These details depend on the OpenSK version in Cargo.toml:
 //! - `ctap/pin_protocol.rs`: ClientPIN v2 derives its key with zero-salt HKDF
 //!   and the label `CTAP2 AES key`; the derived key must never be modified.
-//! - `ctap/client_pin.rs::verify_pin_hash_enc` records a failed attempt before
-//!   calling `decrypt_pin_hash`, then compares values without revealing how
-//!   many bytes matched. Fidophir checks the placeholder and recorded count.
+//! - `ctap/client_pin.rs::verify_pin_hash_enc` deducts a retry before calling
+//!   `decrypt_pin_hash`, then compares values without revealing how many bytes
+//!   matched. It resets retries on success. Fidophir checks the placeholder and
+//!   verifies that the retry deduction was saved before it asks the TPM.
 //! - `check_and_store_new_pin` may read the accepted candidate again to check
 //!   whether a replacement PIN is the same as the old one.
 //! - After a successful PIN check, OpenSK issues a token for later commands and
