@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Adapts **unmodified**, pinned OpenSK to TPM-backed PIN verification.
 //!
-//! A website asks the browser to use a passkey; the browser talks to OpenSK over
-//! CTAP, the protocol used by security keys. The PIN authorizes use of the
-//! authenticator locally: the website receives a signature, not the PIN.
-//! Fidophir presents OpenSK as a virtual security key and uses the TPM to
-//! protect its passkey keys and check PIN authorization.
+//! Fidophir presents a virtual security key to the browser. OpenSK implements
+//! CTAP, the protocol the browser uses to talk to that key; Fidophir supplies
+//! the TPM-backed operations OpenSK needs. This adapter bridges the difference
+//! between OpenSK's PIN verification interface and the TPM's authorization.
 //!
 //! # The PIN verification trick
 //!
