@@ -5,8 +5,6 @@ mod credential;
 use crate::{Error, Result};
 use glib::FileSetContentsFlags as Flags;
 use opensk::api::persist::keys::CREDENTIALS;
-use std::cell::RefCell;
-use std::collections::BTreeSet;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::Read;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
@@ -40,11 +38,16 @@ pub struct Store {
     path: PathBuf,
     _directory: File,
     uid: u32,
-    reported: RefCell<BTreeSet<usize>>,
 }
 
 fn problem(path: &Path, reason: impl Into<String>) -> Error {
     Error::State {
+        path: path.to_owned(),
+        reason: reason.into(),
+    }
+}
+fn invalid_credential(path: &Path, reason: impl Into<String>) -> Error {
+    Error::InvalidCredential {
         path: path.to_owned(),
         reason: reason.into(),
     }
@@ -126,7 +129,6 @@ impl Store {
             path: root.join("v2"),
             _directory: lock(root, uid)?,
             uid,
-            reported: RefCell::new(BTreeSet::new()),
         };
         for path in [
             store.path.clone(),
@@ -144,6 +146,16 @@ impl Store {
         let readme = store.path.join("README.txt");
         if !present(&readme)? {
             store.write_file(&readme, README.as_bytes())?;
+        } else if let Some(bytes) = store.read_file(&readme)? {
+            // Update the obsolete recovery instructions without replacing other
+            // local edits to an existing reference file.
+            const OLD: &str = "Damaged credentials are skipped, with the failing path reported in the journal.\nTheir slots stay reserved: new registrations never overwrite them. Restore the\nfiles with correct ownership/permissions, or remove the whole directory. No\ncredential cache needs rebuilding. Unrecognized filenames are ignored.";
+            const NEW: &str = "Invalid credentials are renamed to e.g. credentials/00000.damaged-1/ and the\nfailing path is reported in the journal. Their numbered slots can be reused.\nTo restore one, stop the service, repair its files, and rename the directory to\nan unused five-digit slot (00000 through 00299). Keep the shared TPM parent.\nFilesystem and permission errors are reported without parking the credential.\nNo credential cache needs rebuilding. Unrecognized filenames are ignored.";
+            if let Ok(text) = std::str::from_utf8(&bytes) {
+                if text.contains(OLD) {
+                    store.write_file(&readme, text.replace(OLD, NEW).as_bytes())?;
+                }
+            }
         }
         // Unpublished directories are created only by us. An interrupted exchange
         // leaves the previous complete credential here, so removal is safe.
@@ -250,16 +262,16 @@ impl Store {
                 return Ok(None);
             }
             return match credential::read(self, &path) {
-                Ok(bytes) => {
-                    self.reported.borrow_mut().remove(&key);
-                    Ok(Some(bytes))
-                }
-                Err(error) => {
-                    if self.reported.borrow_mut().insert(key) {
-                        eprintln!("fidophir: skipping credential: {error}");
-                    }
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(error @ Error::InvalidCredential { .. }) => {
+                    let parked = self.park_credential(&path, key)?;
+                    eprintln!(
+                        "fidophir: parked damaged credential at {}: {error}",
+                        parked.display()
+                    );
                     Ok(None)
                 }
+                Err(error) => Err(error),
             };
         }
         self.check_dir(&self.path.join("authenticator"))?;
@@ -274,11 +286,7 @@ impl Store {
                         )
                     })?;
                 }
-                None if self
-                    .list()?
-                    .into_iter()
-                    .any(|key| CREDENTIALS.contains(&key)) =>
-                {
+                None if self.has_credential_state()? => {
                     return Err(problem(
                         &path,
                         "shared Trusted Platform Module parent is missing while credentials exist; restore it from backup; refusing to provision a replacement",
@@ -326,19 +334,48 @@ impl Store {
         }
         Ok(None)
     }
-    /// Occupied slots that OpenSK's credential iterator cannot read.
-    pub fn damaged_credential_count(&self) -> Result<usize> {
-        let mut count = 0;
-        for key in self
-            .list()?
-            .into_iter()
-            .filter(|key| CREDENTIALS.contains(key))
-        {
-            if self.read(key)?.is_none() {
-                count += 1;
+    fn has_credential_state(&self) -> Result<bool> {
+        let path = self.path.join("credentials");
+        self.check_dir(&path)?;
+        for entry in io_at(&path, fs::read_dir(&path))? {
+            let name = entry?.file_name();
+            let name = name.to_string_lossy();
+            let slot = name
+                .split_once(".damaged-")
+                .map_or(name.as_ref(), |(slot, _)| slot);
+            if number(slot).is_some_and(|n| n < CREDENTIALS.len()) {
+                return Ok(true);
             }
         }
-        Ok(count)
+        Ok(false)
+    }
+
+    fn park_credential(&self, path: &Path, key: usize) -> Result<PathBuf> {
+        use std::os::unix::ffi::OsStrExt;
+        let parent = path.parent().unwrap();
+        let source = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        for suffix in 1..=u32::MAX {
+            let parked = parent.join(format!("{:05}.damaged-{suffix}", key - CREDENTIALS.start));
+            let target = std::ffi::CString::new(parked.as_os_str().as_bytes()).unwrap();
+            let result = unsafe {
+                nix::libc::renameat2(
+                    nix::libc::AT_FDCWD,
+                    source.as_ptr(),
+                    nix::libc::AT_FDCWD,
+                    target.as_ptr(),
+                    nix::libc::RENAME_NOREPLACE,
+                )
+            };
+            if result == 0 {
+                sync_directory(parent)?;
+                return Ok(parked);
+            }
+            let error = std::io::Error::last_os_error();
+            if error.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(problem(path, error.to_string()));
+            }
+        }
+        Err(problem(path, "no available name for damaged credential"))
     }
     pub fn write(&self, key: usize, bytes: &[u8]) -> Result<()> {
         let path = self.key_path(key)?;

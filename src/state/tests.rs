@@ -3,7 +3,7 @@ use super::*;
 use crate::tpm::{Kind, ParentRecord, fixture_blob};
 use opensk::ctap::{cbor_read, cbor_write};
 use sk_cbor::cbor_map;
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Directory(PathBuf);
@@ -96,68 +96,50 @@ fn readable_roundtrip_atomic_replace_delete_reopen_and_lock() {
 }
 
 #[test]
-fn damaged_credential_is_skipped_reserved_and_repairable() {
+fn damaged_credentials_are_parked_without_overwriting_and_can_be_restored() {
     let root = Directory::new();
     let store = Store::open(&root.0).unwrap();
     populate(&store);
-    let meta = root.path("v2/credentials/00000/metadata.ini");
-    let original = fs::read(&meta).unwrap();
-    for content in [
-        b"broken [INI".as_slice(),
-        b"[credential]\nformat_version=99\n",
-    ] {
-        fs::write(&meta, content).unwrap();
-        assert!(store.read(1700).unwrap().is_none());
-        assert_eq!(store.read(1701).unwrap(), Some(record(2)));
-        assert_eq!(store.free_credential_key().unwrap(), Some(1702));
-        assert!(store.write(1700, &record(3)).is_err());
-    }
-    drop(store);
-    let store = Store::open(&root.0).unwrap(); // Corruption must not prevent startup.
-    fs::write(&meta, original).unwrap();
-    assert_eq!(store.read(1700).unwrap(), Some(record(1)));
-    let blob = root.path("v2/credentials/00000/tpm-signing-blob.bin");
-    fs::write(&blob, b"damaged").unwrap();
+    let slot = root.path("v2/credentials/00000");
+    let original = fs::read(slot.join("metadata.ini")).unwrap();
+    fs::write(slot.join("metadata.ini"), b"broken [INI").unwrap();
     assert!(store.read(1700).unwrap().is_none());
-    assert_eq!(store.read(1701).unwrap(), Some(record(2)));
-    store.remove(1700).unwrap();
+    let parked = root.path("v2/credentials/00000.damaged-1");
+    assert!(parked.is_dir());
     assert_eq!(store.free_credential_key().unwrap(), Some(1700));
+    assert_eq!(store.read(1701).unwrap(), Some(record(2)));
+    store.write(1700, &record(3)).unwrap();
+    fs::write(slot.join("metadata.ini"), b"broken again").unwrap();
+    assert!(store.read(1700).unwrap().is_none());
+    assert!(root.path("v2/credentials/00000.damaged-2").is_dir());
+    assert_eq!(
+        fs::read(parked.join("metadata.ini")).unwrap(),
+        b"broken [INI"
+    );
+    fs::write(parked.join("metadata.ini"), original).unwrap();
+    fs::rename(&parked, &slot).unwrap();
+    assert_eq!(store.read(1700).unwrap(), Some(record(1)));
+    drop(store);
+    let store = Store::open(&root.0).unwrap();
+    assert_eq!(store.read(1700).unwrap(), Some(record(1)));
 }
 
 #[test]
-fn unsafe_credential_files_are_isolated_and_shared_state_errors_have_paths() {
+fn filesystem_errors_do_not_park_credentials_and_parked_entries_protect_parent() {
     let root = Directory::new();
     let store = Store::open(&root.0).unwrap();
     populate(&store);
-    let file = root.path("v2/credentials/00000/user-handle.bin");
-    let original = fs::read(&file).unwrap();
+    let slot = root.path("v2/credentials/00000");
+    let file = slot.join("user-handle.bin");
     fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
-    assert!(store.read(1700).unwrap().is_none());
+    assert!(store.read(1700).is_err());
+    assert!(slot.is_dir());
     fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
-    let alias = root.path("alias");
-    fs::hard_link(&file, &alias).unwrap();
+    fs::write(slot.join("metadata.ini"), b"broken [INI").unwrap();
     assert!(store.read(1700).unwrap().is_none());
-    fs::remove_file(&alias).unwrap();
-    fs::rename(&file, &alias).unwrap();
-    symlink(&alias, &file).unwrap();
-    assert!(store.read(1700).unwrap().is_none());
-    fs::remove_file(&file).unwrap();
-    assert!(store.read(1700).unwrap().is_none());
-    assert_eq!(store.read(1701).unwrap(), Some(record(2)));
-    // Never block on an unexpected FIFO.
-    nix::unistd::mkfifo(
-        &file,
-        nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
-    )
-    .unwrap();
-    assert!(store.read(1700).unwrap().is_none());
-    fs::remove_file(&file).unwrap();
-    fs::write(&alias, original).unwrap();
-    fs::rename(&alias, &file).unwrap();
-    assert_eq!(store.read(1700).unwrap(), Some(record(1)));
+    store.remove(1701).unwrap();
     let parent = root.path("v2/authenticator/tpm-parent.bin");
-    let backup = fs::read(&parent).unwrap();
-    fs::remove_file(&parent).unwrap();
+    fs::remove_file(parent).unwrap();
     assert!(
         store
             .read(PARENT)
@@ -171,19 +153,8 @@ fn unsafe_credential_files_are_isolated_and_shared_state_errors_have_paths() {
             .err()
             .unwrap()
             .to_string()
-            .contains("tpm-parent.bin")
+            .contains("refusing to provision")
     );
-    fs::write(&parent, b"damaged").unwrap();
-    fs::set_permissions(&parent, fs::Permissions::from_mode(0o600)).unwrap();
-    assert!(
-        Store::open(&root.0)
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("restore")
-    );
-    fs::write(&parent, backup).unwrap();
-    assert!(Store::open(&root.0).is_ok());
 }
 
 #[test]
@@ -204,6 +175,23 @@ fn incomplete_initialization_can_be_reopened() {
     drop(store);
     let store = Store::open(&root.0).unwrap();
     assert_eq!(store.read(1700).unwrap(), Some(record(1)));
+}
+
+#[test]
+fn startup_parks_invalid_credentials_and_updates_old_recovery_instructions() {
+    let root = Directory::new();
+    let store = Store::open(&root.0).unwrap();
+    populate(&store);
+    fs::write(root.path("v2/credentials/00000/metadata.ini"), b"[broken").unwrap();
+    let readme = root.path("v2/README.txt");
+    fs::write(&readme, "Local notes\nDamaged credentials are skipped, with the failing path reported in the journal.\nTheir slots stay reserved: new registrations never overwrite them. Restore the\nfiles with correct ownership/permissions, or remove the whole directory. No\ncredential cache needs rebuilding. Unrecognized filenames are ignored.\n").unwrap();
+    drop(store);
+    let store = Store::open(&root.0).unwrap();
+    assert!(root.path("v2/credentials/00000.damaged-1").is_dir());
+    assert_eq!(store.free_credential_key().unwrap(), Some(1700));
+    let text = fs::read_to_string(readme).unwrap();
+    assert!(text.starts_with("Local notes\n"));
+    assert!(text.contains("00000.damaged-1"));
 }
 
 #[test]

@@ -40,10 +40,12 @@ Delete a whole credential directory to remove that passkey locally. This does
 not revoke it at the website or invalidate backups. A running operation may
 already have loaded it, so deletion is not an immediate revocation mechanism.
 
-Damaged credentials are skipped, with the failing path reported in the journal.
-Their slots stay reserved: new registrations never overwrite them. Restore the
-files with correct ownership/permissions, or remove the whole directory. No
-credential cache needs rebuilding. Unrecognized filenames are ignored.
+Invalid credentials are renamed to e.g. credentials/00000.damaged-1/ and the
+failing path is reported in the journal. Their numbered slots can be reused.
+To restore one, stop the service, repair its files, and rename the directory to
+an unused five-digit slot (00000 through 00299). Keep the shared TPM parent.
+Filesystem and permission errors are reported without parking the credential.
+No credential cache needs rebuilding. Unrecognized filenames are ignored.
 
 Shared state
 ------------

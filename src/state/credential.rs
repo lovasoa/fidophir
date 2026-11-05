@@ -66,7 +66,7 @@ pub(super) fn read(store: &Store, path: &Path) -> Result<Vec<u8>> {
     store.check_dir(path)?;
     let required = |name: &str| {
         store.read_file(&path.join(name))?.ok_or_else(|| {
-            problem(
+            invalid_credential(
                 &path.join(name),
                 "missing required file; restore it or remove this credential directory",
             )
@@ -76,7 +76,7 @@ pub(super) fn read(store: &Store, path: &Path) -> Result<Vec<u8>> {
     let bytes = required("metadata.ini")?;
     let ini = glib::KeyFile::new();
     let invalid = |name: &str| {
-        problem(
+        invalid_credential(
             &meta_path,
             format!("invalid or missing {name}; check README.txt"),
         )
@@ -91,7 +91,7 @@ pub(super) fn read(store: &Store, path: &Path) -> Result<Vec<u8>> {
         .map_err(|_| invalid("format_version"))?
         != 1
     {
-        return Err(problem(&meta_path, "unsupported format_version"));
+        return Err(invalid_credential(&meta_path, "unsupported format_version"));
     }
     let text = |name: &str| -> Result<Option<String>> {
         if !ini.has_key(GROUP, name).unwrap_or(false) {
@@ -110,13 +110,14 @@ pub(super) fn read(store: &Store, path: &Path) -> Result<Vec<u8>> {
     let blob_path = path.join("tpm-signing-blob.bin");
     let blob = required("tpm-signing-blob.bin")?;
     let key = crate::tpm::Blob::decode(&blob, crate::tpm::Kind::Signing).map_err(|_| {
-        problem(
+        invalid_credential(
             &blob_path,
             "invalid Trusted Platform Module signing blob; restore from backup",
         )
     })?;
-    key.verifying_key()
-        .map_err(|_| problem(&blob_path, "invalid Trusted Platform Module public point"))?;
+    key.verifying_key().map_err(|_| {
+        invalid_credential(&blob_path, "invalid Trusted Platform Module public point")
+    })?;
     let c = PublicKeyCredentialSource {
         key_type: PublicKeyCredentialType::PublicKey,
         credential_id: required("credential-id.bin")?,
@@ -135,12 +136,15 @@ pub(super) fn read(store: &Store, path: &Path) -> Result<Vec<u8>> {
         large_blob_key: store.read_file(&path.join("large-blob-key.bin"))?,
     };
     if c.credential_id.len() != 32 || c.user_handle.len() > 64 || c.rp_id.is_empty() {
-        return Err(problem(path, "invalid credential ID, user handle or RP ID"));
+        return Err(invalid_credential(
+            path,
+            "invalid credential ID, user handle or RP ID",
+        ));
     }
     let mut bytes = Vec::new();
     cbor_write(c.into(), &mut bytes).map_err(|_| invalid("credential encoding"))?;
     if bytes.len() > MAX_VALUE {
-        return Err(problem(path, "credential exceeds 4096 bytes"));
+        return Err(invalid_credential(path, "credential exceeds 4096 bytes"));
     }
     Ok(bytes)
 }

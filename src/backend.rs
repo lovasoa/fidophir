@@ -10,7 +10,7 @@ use opensk::{
     api::{
         crypto::{aes256::Aes256, rust_crypto::SoftwareAes256},
         key_store::{self, CredentialSource, KeyStore},
-        persist::{Persist, PersistIter},
+        persist::{Persist, PersistCredentialIter, PersistIter, keys::CREDENTIALS},
     },
     ctap::{
         crypto_wrapper::aes256_cbc_decrypt,
@@ -146,9 +146,6 @@ fn fatal(message: impl std::fmt::Display) -> ! {
 }
 
 impl Backend {
-    pub(crate) fn damaged_credential_count(&self) -> CtapResult<usize> {
-        self.run(false, |_, store| store.damaged_credential_count())
-    }
     pub fn new(root: PathBuf, io: SharedIo) -> Result<Self> {
         Self::start(root, "device:/dev/tpmrm0".parse()?, io)
     }
@@ -355,6 +352,24 @@ impl Persist for Backend {
     fn iter(&self) -> CtapResult<PersistIter<'_>> {
         let keys = self.run(false, |_, store| store.list())?;
         Ok(Box::new(keys.into_iter().filter(|k| *k <= 4095).map(Ok)))
+    }
+    fn iter_credentials(&self) -> CtapResult<PersistCredentialIter<'_>> {
+        // OpenSK's count_credentials counts iterator errors as credentials.
+        // Surface read and rename failures before returning the iterator instead.
+        let credentials = self.run(false, |_, store| {
+            let mut credentials = Vec::new();
+            for key in store
+                .list()?
+                .into_iter()
+                .filter(|k| CREDENTIALS.contains(k))
+            {
+                if let Some(value) = store.read(key)? {
+                    credentials.push((key, value));
+                }
+            }
+            Ok(credentials)
+        })?;
+        Ok(Box::new(credentials.into_iter().map(Ok)))
     }
     fn free_credential_key(&self) -> CtapResult<usize> {
         self.run(false, |_, store| store.free_credential_key())?
