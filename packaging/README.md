@@ -25,7 +25,7 @@ For a DEB, install the build dependencies listed in `debian/control` and run fro
 dpkg-buildpackage --build=binary --no-sign
 ```
 
-Package builds fetch locked Cargo dependencies as needed. RPM uses a plain archive of tracked sources, including the pinned OpenSK submodule; Debian builds directly from the checkout. There is no vendored dependency bundle. `tools/licenses.py` collects dependency license notices from Cargo's downloaded sources for installation in both packages. Native GLib/GIO and TPM2-TSS libraries remain distribution-managed. `make install DESTDIR=/absolute/staging/path` stages files only.
+Package builds fetch locked Cargo dependencies as needed. `make prepare` copies the pinned OpenSK and CBOR libraries without source changes. Only the standalone OpenSK crate's `Cargo.lock` is replaced by `locks/opensk.Cargo.lock`; `make check-opensk` compares every prepared source file with upstream and checks that lockfile. CI and `make test` run this check before compilation. RPM uses a plain archive of tracked sources, including the pinned OpenSK submodule; Debian builds directly from the checkout. There is no vendored dependency bundle. `tools/licenses.py` collects dependency license notices from Cargo's downloaded sources for installation in both packages. Native GLib/GIO and TPM2-TSS libraries remain distribution-managed. `make install DESTDIR=/absolute/staging/path` stages files only.
 
 ## Installation behavior
 
@@ -35,11 +35,17 @@ Each instance runs as the dedicated `fidophir` account with supplementary `tss` 
 
 See the [state format and maintenance instructions](../src/state/README.txt). Stopping or removing the package preserves state. Service accounts, root and the kernel remain trusted; this isolates desktop users, not compromised service processes. See the [physical acceptance checklist](../VALIDATION.md#remaining-physical-acceptance).
 
+## Crash recovery
+
+Unexpected adapter states and failures in OpenSK's infallible signing/key-generation interfaces stop the daemon after a sanitized fatal log. `Restart=on-failure` retries after three seconds; `StartLimitIntervalSec=0` prevents repeated failures from exhausting a restart quota. A persistent hardware, configuration or storage failure still requires repair. Intentional stops, logout and package removal do not trigger recovery.
+
+A restart closes the UHID descriptor and briefly disconnects the virtual key, then publishes a fresh device after initialization. Credentials remain on disk, while transient PIN authorization is lost. The interrupted browser operation may need to be retried; this policy provides automatic recovery rather than uninterrupted availability.
+
 ## Lifecycle tests
 
 `bash tests/packaging.sh` checks installation-hook policy decisions without touching host services. It also runs with `make test`.
 
-`tests/systemd_lifecycle.py` builds and installs small fixture packages using the production unit dependencies, sysusers declaration, preset, installation hook and distro lifecycle helpers. Run it as root only in a clean, disposable container booted with systemd: `python3 tests/systemd_lifecycle.py deb` on Debian 13 with `debhelper` and `dpkg-dev`, or `python3 tests/systemd_lifecycle.py rpm` on Fedora 44 with `rpm-build` and `systemd-rpm-macros`. Both need Python 3. A dummy worker and relaxed restart limit replace FIDO/TPM operations and service sandboxing, so these tests establish lifecycle and directory behavior, not hardware or confinement guarantees. They cover existing logins, matching UID dependencies, logout, upgrade, target restart/removal and policy/mask denial.
+`tests/systemd_lifecycle.py` builds and installs small fixture packages using the production unit dependencies, sysusers declaration, preset, installation hook and distro lifecycle helpers. Run it as root only in a clean, disposable container booted with systemd: `python3 tests/systemd_lifecycle.py deb` on Debian 13 with `debhelper` and `dpkg-dev`, or `python3 tests/systemd_lifecycle.py rpm` on Fedora 44 with `rpm-build` and `systemd-rpm-macros`. Both need Python 3. A dummy worker replaces FIDO/TPM operations and service sandboxing, so these tests establish lifecycle and directory behavior, not hardware or confinement guarantees. They cover existing logins, matching UID dependencies, logout, upgrade, target restart/removal and policy/mask denial.
 
 ## Release builds
 

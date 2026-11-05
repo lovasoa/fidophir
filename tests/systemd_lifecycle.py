@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 """Exercise production unit dependencies and real package helpers in a disposable
 booted container. The fixture worker replaces FIDO/TPM and sandboxing only;
-the fixture disables restart-rate limits for rapid package transactions.
+the production restart policy is retained for crash-recovery checks.
 This checks packaging transactions, not hardware or service confinement.
 Run as root inside Debian 13 (debhelper installed) or Fedora 44 (rpm-build).
 """
@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import pwd
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -47,7 +48,9 @@ def package(work, kind, version):
         text = (ROOT / 'packaging' / file).read_text()
         if file.endswith('.service'):
             unit, install = text.split('[Service]')[0], text.split('[Install]')[1]
-            unit = unit.replace('StartLimitIntervalSec=60', 'StartLimitIntervalSec=0')
+            # Keep the production retry settings while replacing TPM/sandboxing.
+            recovery = '\n'.join(line for line in text.splitlines()
+                                 if line.startswith(('Restart=', 'RestartSec=')))
             text = unit + '''[Service]
 Type=exec
 ExecStart=/usr/libexec/fidophir --user %i
@@ -56,7 +59,7 @@ Group=fidophir
 UMask=0077
 StateDirectory=fidophir-users/%i
 StateDirectoryMode=0700
-[Install]''' + install
+''' + recovery + '\n[Install]' + install
         (units / file).write_text(text)
     wants = units / 'user@.service.wants'
     wants.mkdir()
@@ -125,6 +128,14 @@ def main(kind):
         assert state.stat().st_uid == owner and state.stat().st_mode & 0o777 == 0o700
         assert (state / 'instance').read_text().splitlines() == ['1000', str(state)]
         print(f'PASS {kind}: automatic account/directory creation and existing-login activation', flush=True)
+        # More failures than the old burst limit must recover without manual starts.
+        for _ in range(4):
+            before = pid('fidophir@1000.service')
+            os.kill(int(before), signal.SIGKILL)
+            wait(lambda: active('fidophir@1000.service') and
+                 pid('fidophir@1000.service') != before)
+        assert (state / 'instance').read_text().splitlines() == ['1000', str(state)]
+        print(f'PASS {kind}: four consecutive failures restart automatically', flush=True)
         run('systemctl', 'start', 'user@1001.service')
         wait(lambda: active('fidophir@1001.service'))
         run('systemctl', 'stop', 'user@1001.service')

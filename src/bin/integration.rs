@@ -3,15 +3,14 @@
 use fidophir::{
     env::LinuxEnv,
     io::{Io, dispatch_desktop},
+    opensk_adapter::Authenticator,
 };
 use opensk::ctap::hid::{CtapHid, CtapHidCommand, HidPacketIterator, Message, MessageAssembler};
-use opensk::ctap::{CtapState, main_hid::MainHid};
 use std::io::{Read, Write};
 
 fn exchange(
     env: &mut LinuxEnv,
-    state: &mut CtapState<LinuxEnv>,
-    hid: &mut MainHid<LinuxEnv>,
+    authenticator: &mut Authenticator,
     io: &fidophir::io::SharedIo,
     message: Message,
 ) -> Message {
@@ -19,7 +18,7 @@ fn exchange(
     let mut answer = None;
     for frame in HidPacketIterator::new(message).expect("bounded test request") {
         io.borrow_mut().enter(frame[..4].try_into().unwrap());
-        for reply in hid.process_hid_packet(env, &frame, false, state) {
+        for reply in authenticator.process_hid_packet(env, &frame) {
             let (cid, packet) = CtapHid::<LinuxEnv>::process_single_packet(&reply);
             if let Some(message) = assembler
                 .parse_packet(env, cid, packet)
@@ -55,18 +54,18 @@ fn main() {
         )
     }
     .expect("test environment");
-    let mut state = CtapState::new(&mut env);
-    let mut hid = MainHid::default();
+    let mut authenticator = Authenticator::new(&mut env);
     if args[3] == "uhid" {
         io.borrow_mut().publish(u32::MAX).expect("test UHID device");
         eprintln!("test UHID ready");
         loop {
             dispatch_desktop();
-            state.can_sleep(&mut env);
+            env.backend
+                .expire_pin_authorization(fidophir::io::boot_ms());
             let packet = io.borrow_mut().receive().expect("test UHID read");
             if let Some(packet) = packet {
                 io.borrow_mut().enter(packet[..4].try_into().unwrap());
-                for frame in hid.process_hid_packet(&mut env, &packet, false, &mut state) {
+                for frame in authenticator.process_hid_packet(&mut env, &packet) {
                     io.borrow_mut().send(&frame).expect("test UHID write");
                 }
                 io.borrow_mut().leave();
@@ -77,8 +76,7 @@ fn main() {
     }
     let init = exchange(
         &mut env,
-        &mut state,
-        &mut hid,
+        &mut authenticator,
         &io,
         Message {
             cid: [0xff; 4],
@@ -102,7 +100,8 @@ fn main() {
         assert!((1..=7609).contains(&length));
         let mut bytes = vec![0; length];
         input.read_exact(&mut bytes).expect("test input");
-        state.can_sleep(&mut env);
+        env.backend
+            .expire_pin_authorization(fidophir::io::boot_ms());
         if args[3] == "native-cancel" && bytes[0] == 1 {
             let io = io.clone();
             glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
@@ -114,8 +113,7 @@ fn main() {
         }
         let response = exchange(
             &mut env,
-            &mut state,
-            &mut hid,
+            &mut authenticator,
             &io,
             Message {
                 cid,
@@ -123,11 +121,7 @@ fn main() {
                 payload: bytes,
             },
         );
-        let response = if io.borrow().cancelled() {
-            vec![0x2d]
-        } else {
-            response.payload
-        };
+        let response = response.payload;
         output
             .write_all(&(response.len() as u32).to_be_bytes())
             .expect("test output");

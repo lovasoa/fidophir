@@ -79,6 +79,7 @@ Keep another sign-in or recovery method for each account. Fidophir passkeys stay
 - **No security key appears:** Make sure your desktop session is local, active and unlocked. Check the service status with `systemctl status "fidophir@$(id -u).service"`.
 - **Device path missing after an upgrade:** Run `sudo systemctl restart "fidophir@$(id -u).service"` to recreate it.
 - **The service fails to start:** Read its error messages with `journalctl -u "fidophir@$(id -u).service" -b`. Check that the computer has a working TPM and that `/dev/tpmrm0` and `/dev/uhid` exist.
+- **The key briefly disappears:** Hardware signing failures or internal compatibility checks can restart the service. It retries automatically; retry the browser operation after it returns. Inspect the journal if this repeats.
 - **No approval prompt appears:** Unlock the screen and make sure your desktop can show authentication prompts, then retry.
 - **Enrollment fails or asks for a PIN:** Set the PIN as described above, select the security key option, and retry. Browser and website compatibility is still being tested.
 - **Forgotten or blocked PIN:** Follow the reset steps below. Avoid repeated guesses, which can also lock the TPM temporarily.

@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# Test the installation hook without accessing the host's services.
+# Test installation policy without accessing the host's services.
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
+# Repeated adapter failures must not leave an otherwise healthy key stopped.
+grep -qx 'StartLimitIntervalSec=0' "$repo/packaging/fidophir@.service"
+grep -qx 'Restart=on-failure' "$repo/packaging/fidophir@.service"
+grep -qx 'RestartSec=3' "$repo/packaging/fidophir@.service"
 test_dir=$(mktemp -d)
 trap 'rm -rf -- "$test_dir"' EXIT
 mkdir "$test_dir/bin" "$test_dir/live"

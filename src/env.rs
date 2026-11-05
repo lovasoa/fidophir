@@ -2,8 +2,9 @@
 use crate::{
     Error, Result,
     approval::Approval,
-    backend::{Backend, SigningKey, TpmEcdsa},
+    backend::{Backend, TpmEcdsa},
     io::{SharedIo, boot_ms, dispatch_desktop},
+    opensk_adapter::PinProtocolHkdf256,
 };
 use opensk::{
     api::{
@@ -11,11 +12,9 @@ use opensk::{
         connection::{HidConnection, RecvStatus, UsbEndpoint},
         crypto::{Crypto, rust_crypto::*},
         customization::{CustomizationImpl, DEFAULT_CUSTOMIZATION},
-        private_key::PrivateKey,
     },
     ctap::{
-        command::Command,
-        data_formats::{ClientPinSubCommand, CredentialProtectionPolicy, SignatureAlgorithm},
+        data_formats::CredentialProtectionPolicy,
         status_code::{Ctap2StatusCode as Status, CtapResult},
     },
     env::Env,
@@ -49,7 +48,7 @@ impl Crypto for HostCrypto {
     type Ecdsa = TpmEcdsa;
     type Sha256 = SoftwareSha256;
     type Hmac256 = SoftwareHmac256;
-    type Hkdf256 = SoftwareHkdf256;
+    type Hkdf256 = PinProtocolHkdf256;
 }
 
 pub struct HostClock;
@@ -149,6 +148,17 @@ impl LinuxEnv {
             profile,
         })
     }
+    pub(crate) fn set_approval_context(
+        &mut self,
+        operation: Option<&'static str>,
+        rp: Option<&str>,
+    ) {
+        self.approval.set_context(operation, rp);
+    }
+
+    pub(crate) fn command_was_cancelled(&self) -> bool {
+        self.connection.0.borrow().cancelled()
+    }
 }
 
 impl Env for LinuxEnv {
@@ -163,53 +173,6 @@ impl Env for LinuxEnv {
     type HidConnection = Connection;
     fn rng(&mut self) -> &mut HostRng {
         &mut self.rng
-    }
-    fn process_vendor_command(
-        &mut self,
-        bytes: &[u8],
-        _: opensk::ctap::Channel,
-    ) -> Option<Vec<u8>> {
-        // Reuse OpenSK's existing pre-dispatch hook and parser. No wire-format logic here.
-        self.approval.set_context(None, None);
-        let command = Command::deserialize(bytes).ok()?;
-        let (operation, rp) = match &command {
-            Command::AuthenticatorMakeCredential(p) => {
-                if !p.options.rk {
-                    return Some(vec![Status::CTAP2_ERR_UNSUPPORTED_OPTION as u8]);
-                }
-                ("create a passkey", Some(p.rp.rp_id.as_str()))
-            }
-            Command::AuthenticatorGetAssertion(p) => ("sign in", Some(p.rp_id.as_str())),
-            Command::AuthenticatorClientPin(p) => match p.sub_command {
-                ClientPinSubCommand::SetPin => ("set up your security key PIN", None),
-                ClientPinSubCommand::ChangePin => ("change your security key PIN", None),
-                _ => return None,
-            },
-            Command::AuthenticatorSelection => ("use your security key", None),
-            Command::AuthenticatorReset => ("delete all your Fidophir passkeys", None),
-            _ => return None,
-        };
-        self.approval.set_context(Some(operation), rp);
-        None
-    }
-    fn verify_pin(&mut self, hash: &[u8; 16]) -> CtapResult<bool> {
-        self.backend.verify(hash)
-    }
-    fn clear_pin_authorization(&mut self) {
-        self.backend.clear();
-    }
-    fn new_credential_key(
-        &mut self,
-        algorithm: SignatureAlgorithm,
-    ) -> CtapResult<PrivateKey<Self>> {
-        match algorithm {
-            SignatureAlgorithm::Es256 => SigningKey::generate(&self.backend).map(PrivateKey::Ecdsa),
-            _ => Err(Status::CTAP2_ERR_UNSUPPORTED_ALGORITHM),
-        }
-    }
-    fn sign_credential(&mut self, key: &PrivateKey<Self>, message: &[u8]) -> CtapResult<Vec<u8>> {
-        let PrivateKey::Ecdsa(key) = key;
-        key.sign_with(&self.backend, message)
     }
     fn user_presence(&mut self) -> &mut Approval {
         &mut self.approval

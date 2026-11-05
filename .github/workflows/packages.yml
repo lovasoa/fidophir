@@ -68,6 +68,7 @@ jobs:
       - name: Prepare pinned upstream sources and fetch locked dependencies
         run: |
           make prepare
+          make check-opensk
           cargo fetch --locked
           cargo fetch --locked --manifest-path build/opensk/Cargo.toml
       - name: Check formatting and lint
