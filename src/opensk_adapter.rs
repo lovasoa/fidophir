@@ -11,7 +11,8 @@
 //! When the user enters a PIN, the browser applies SHA-256, a repeatable
 //! one-way calculation, and takes the first 16 bytes of the result. We call
 //! these bytes the *candidate*. The browser encrypts the candidate before
-//! sending it to OpenSK.
+//! sending it to OpenSK. OpenSK then decrypts it using a key it shares with the
+//! browser, recovering the candidate for the PIN check.
 //!
 //! OpenSK normally decrypts the candidate and compares it with an expected
 //! value obtained from storage. Fidophir instead asks the TPM whether the
