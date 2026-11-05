@@ -9,6 +9,7 @@ import hashlib
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -182,18 +183,13 @@ def main():
                 sign(ctap,pin,second)
                 if args.capacity:
                     pipe.close(); pipe = None
-                    records = state / "v1"
-                    template = cbor.decode((records / "01700").read_bytes())
+                    records = state / "v2" / "credentials"
                     # Synthetic records reuse a test key but have distinct IDs and users.
-                    for key in range(1702, 1999):
-                        record = dict(template)
-                        record[0] = key.to_bytes(32, "big")
-                        record[3] = key.to_bytes(4, "big")
-                        record[7] = key
-                        path = records / f"{key:05d}"
-                        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                        with os.fdopen(fd, "wb") as output:
-                            output.write(cbor.encode(record))
+                    for slot in range(2, 299):
+                        path = records / f"{slot:05d}"
+                        shutil.copytree(records / "00000", path)
+                        (path / "credential-id.bin").write_bytes(slot.to_bytes(32, "big"))
+                        (path / "user-handle.bin").write_bytes(slot.to_bytes(4, "big"))
                     pipe = Pipe(args.binary, state, tcti)
                     ctap = Ctap2(pipe)
                     sign(ctap, pin, first)
@@ -201,14 +197,14 @@ def main():
                     sign(ctap, pin, last)
                     expect(CtapError.ERR.KEY_STORE_FULL, lambda: register(ctap, pin, b"capacity-overflow"))
                     pipe.close(); pipe = None
-                    for key in range(1702, 2000):
-                        (records / f"{key:05d}").unlink()
+                    for slot in range(2, 300):
+                        shutil.rmtree(records / f"{slot:05d}")
                     pipe = Pipe(args.binary, state, tcti)
                     ctap = Ctap2(pipe)
                     print("PASS: 300 credentials, full-store rejection and existing credential after restart", flush=True)
-                assert not (state / "v1" / "02045").exists(), "software PIN verifier was written"
+                assert not (state / "v2/authenticator/pin-properties.bin").exists(), "software PIN verifier was written"
                 h = hashlib.sha256(pin.encode()).digest()[:16]
-                assert all(h not in f.read_bytes() for f in (state / "v1").iterdir())
+                assert all(h not in f.read_bytes() for f in (state / "v2").rglob("*") if f.is_file())
                 print("PASS: two TPM-backed credentials, self-attestation and independent signature verification", flush=True)
 
                 expect(CtapError.ERR.UNSUPPORTED_OPTION, lambda: ctap.make_credential(os.urandom(32),
@@ -231,17 +227,17 @@ def main():
                     sign(ctap,pin,first)
                     print("PASS: expired token rejected; new PIN authorization works",flush=True)
 
-                old_parent = (state / "v1" / "65536").read_bytes()
-                before = {f.name:f.read_bytes() for f in (state / "v1").iterdir() if 1700 <= int(f.name) < 2000}
+                old_parent = (state / "v2/authenticator/tpm-parent.bin").read_bytes()
+                before = {str(f.relative_to(state)): f.read_bytes() for f in (state / "v2/credentials").rglob("*") if f.is_file()}
                 # Exercise the existing forced-change comparison through KeyStore:
                 # it may compare only the candidate just verified by TPM, not the marker.
-                force = state / "v1" / "02040"
+                force = state / "v2/authenticator/force-pin-change.flag"
                 os.close(os.open(force,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600))
                 expect(CtapError.ERR.PIN_POLICY_VIOLATION,lambda:ClientPin(ctap).change_pin(pin,pin))
                 assert force.exists()
                 ClientPin(ctap).change_pin(pin,new_pin)
                 assert not force.exists(), "successful PIN change did not clear forced-change state"
-                assert before == {f.name:f.read_bytes() for f in (state / "v1").iterdir() if 1700 <= int(f.name) < 2000}
+                assert before == {str(f.relative_to(state)): f.read_bytes() for f in (state / "v2/credentials").rglob("*") if f.is_file()}
                 sign(ctap,new_pin,first)
                 pipe.close(); pipe = None
                 pipe = Pipe(args.binary,state,tcti)
@@ -258,37 +254,56 @@ def main():
                 assert len(credentials) == 2
                 print("PASS: standard credential-management enumeration",flush=True)
 
-                # Corrupt only the TPM private blob, preserving its public point/template.
-                # Unexpected hardware failure must stop the process before any signature escapes.
-                record_file = next(f for f in (state / "v1").iterdir()
-                                   if 1700 <= int(f.name) < 2000 and cbor.decode(f.read_bytes())[0] == first.credential_id)
-                original = record_file.read_bytes()
-                record = cbor.decode(original)
-                algorithm, encoded = record[12]
-                wrapped = cbor.decode(encoded)
-                damaged = bytearray(wrapped[2]); damaged[-1] ^= 1; wrapped[2] = bytes(damaged)
-                record[12] = [algorithm,cbor.encode(wrapped)]
-                record_file.write_bytes(cbor.encode(record))
-                try:
-                    sign(ctap,new_pin,first)
-                except RuntimeError as error:
-                    assert "Rust test bridge exited" in str(error)
-                else:
-                    raise AssertionError("corrupted hardware key did not stop the service")
-                pipe.close(expected=1); pipe = None
-                # This disposable TCP simulator has no Linux resource manager to
-                # flush the long-lived primary when the daemon's device fd closes.
-                subprocess.run(["tpm2_flushcontext","-T",tcti,"-t"],check=True)
-                record_file.write_bytes(original)
-                pipe = Pipe(args.binary,state,tcti)
+                directory = next(f.parent for f in (state / "v2/credentials").glob("*/credential-id.bin")
+                                 if f.read_bytes() == first.credential_id)
+                metadata = directory / "metadata.ini"
+                original_metadata = metadata.read_bytes()
+                metadata.write_text("[broken INI")
+                expect(CtapError.ERR.NO_CREDENTIALS, lambda: sign(ctap, new_pin, first))
+                sign(ctap, new_pin, second)
+                pipe.close(); pipe = None
+                pipe = Pipe(args.binary, state, tcti)
                 ctap = Ctap2(pipe)
-                # A token obtained before the crash must not survive restart.
-                digest = os.urandom(32)
-                expect(CtapError.ERR.PIN_AUTH_INVALID,lambda:ctap.get_assertion(
-                    "example.test",digest,[{"id":first.credential_id,"type":"public-key"}],
-                    pin_uv_param=protocol.authenticate(token,digest),pin_uv_protocol=protocol.VERSION))
-                sign(ctap,new_pin,first)
-                print("PASS: TPM failure exits with status 1; restart rejects old tokens and signs after fresh PIN",flush=True)
+                sign(ctap, new_pin, second)
+                metadata.write_bytes(original_metadata)
+                sign(ctap, new_pin, first)
+                print("PASS: malformed metadata isolated across restart; repair takes effect immediately", flush=True)
+
+                pipe.close(); pipe = None
+                removed = base / "removed-credential"
+                shutil.move(directory, removed)
+                pipe = Pipe(args.binary, state, tcti)
+                ctap = Ctap2(pipe)
+                expect(CtapError.ERR.NO_CREDENTIALS, lambda: sign(ctap, new_pin, first))
+                sign(ctap, new_pin, second)
+                shutil.move(removed, directory)
+                sign(ctap, new_pin, first)
+                print("PASS: admin deletion survives restart; directory restore works", flush=True)
+
+                # Structurally valid but cryptographically damaged TPM private data
+                # fails this operation without taking down healthy credentials.
+                record_file = directory / "tpm-signing-blob.bin"
+                original = record_file.read_bytes()
+                wrapped = cbor.decode(original)
+                damaged = bytearray(wrapped[2]); damaged[-1] ^= 1; wrapped[2] = bytes(damaged)
+                record_file.write_bytes(cbor.encode(wrapped))
+                expect(0xF3, lambda: sign(ctap, new_pin, first))
+                sign(ctap, new_pin, second)
+                record_file.write_bytes(original)
+                sign(ctap, new_pin, first)
+                print("PASS: TPM key failure is contained; healthy and repaired credentials still sign", flush=True)
+
+                # Simulate missing shared state while running. Never silently
+                # provision a new parent that would orphan the remaining keys.
+                parent_file = state / "v2/authenticator/tpm-parent.bin"
+                current_parent = parent_file.read_bytes()
+                parent_file.unlink()
+                expect(0xF3, lambda: authorize(ctap, new_pin, ClientPin.PERMISSION.GET_ASSERTION, "example.test"))
+                fd = os.open(parent_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                with os.fdopen(fd, "wb") as output:
+                    output.write(current_parent)
+                sign(ctap, new_pin, first)
+                print("PASS: missing shared parent rejected; restoring it recovers signing", flush=True)
 
                 pipe.close(); pipe = None
                 handles = subprocess.check_output(["tpm2_getcap","-T",tcti,"handles-transient"],text=True)
@@ -296,12 +311,12 @@ def main():
                 assert not handles.strip() and not sessions.strip(), "TPM handles leaked after shutdown"
 
                 # Demonstrate the documented limitation, rather than claim PIN change revokes backups.
-                current = (state / "v1" / "65536").read_bytes()
-                (state / "v1" / "65536").write_bytes(old_parent)
+                current = (state / "v2/authenticator/tpm-parent.bin").read_bytes()
+                (state / "v2/authenticator/tpm-parent.bin").write_bytes(old_parent)
                 pipe = Pipe(args.binary,state,tcti)
                 sign(Ctap2(pipe),pin,first)
                 pipe.close(); pipe = None
-                (state / "v1" / "65536").write_bytes(current)
+                (state / "v2/authenticator/tpm-parent.bin").write_bytes(current)
                 print("PASS: old-parent rollback limitation reproduced; handles cleaned up",flush=True)
 
                 pipe = Pipe(args.binary,state,tcti,"deny")

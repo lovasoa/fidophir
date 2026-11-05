@@ -84,6 +84,10 @@ Keep another sign-in or recovery method for each account. Fidophir passkeys stay
 - **Enrollment fails or asks for a PIN:** Set the PIN in Firefox's `about:webauthn`, select the security key option, and retry. Browser and website compatibility is still being tested.
 - **Forgotten or blocked PIN:** Follow the reset steps below. Avoid repeated guesses, which can also lock the TPM temporarily.
 
+### Saved credentials and maintenance
+
+State lives under `/var/lib/fidophir-users/UID/v2/`. Each credential has a numbered directory with readable `metadata.ini` and separate binary files. `README.txt` inside the store explains editing, deletion, permissions and backup; the [format reference](src/state/README.txt) is also in this repository. Stop the user's service before maintenance. A damaged credential is skipped and reported in the journal without disabling healthy credentials.
+
 ### Reset a forgotten or blocked PIN
 
 Resetting deletes **all your Fidophir passkeys** on this computer. You will need another sign-in or recovery method for each website, then add new passkeys. Other users' Fidophir passkeys are unaffected.
@@ -91,7 +95,7 @@ Resetting deletes **all your Fidophir passkeys** on this computer. You will need
 1. Open a terminal in your own desktop account, stop the service and delete your state:
 
    ```sh
-   sudo systemctl stop "fidophir@$(id -u).service" && sudo rm -rf -- "/var/lib/fidophir-users/$(id -u)/v1"
+   sudo systemctl stop "fidophir@$(id -u).service" && sudo rm -rf -- "/var/lib/fidophir-users/$(id -u)/v2"
    ```
 
 3. Start the service again, then set a new PIN and add passkeys as described above:

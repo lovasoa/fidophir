@@ -106,7 +106,7 @@ cp -a {stage}/. %{{buildroot}}/
 
 def main(kind):
     assert os.geteuid() == 0 and Path('/run/systemd/container').exists(), 'use a disposable booted container'
-    assert not Path('/usr/libexec/fidophir').exists() and not Path('/etc/fidophir').exists(), 'requires a clean test container'
+    assert not Path('/usr/libexec/fidophir').exists(), 'requires a clean test container'
     # Never restart a real desktop/user manager, even inside the test container.
     user = Path('/etc/systemd/system/user@.service')
     user.write_text('[Service]\nType=exec\nExecStart=/bin/sleep infinity\n')
@@ -139,22 +139,12 @@ def main(kind):
         before = pid('fidophir@1000.service')
         run('systemctl', 'restart', 'fidophir.target')
         wait(lambda: active('fidophir@1000.service') and pid('fidophir@1000.service') != before)
-        legacy = Path('/var/lib/fidophir')
-        (legacy / 'v1').mkdir(parents=True, exist_ok=True)
-        (legacy / 'v1/credential-fixture').write_text('preserve this credential')
-        owner_config = Path('/etc/fidophir')
-        owner_config.mkdir(exist_ok=True)
-        (owner_config / 'owner.conf').write_text('FIDOPHIR_OWNER_UID=1000\n')
-        third = package(work, kind, '3.0')
-        run(*install, str(third))
-        wait(lambda: (legacy / 'instance').exists())
-        assert (legacy / 'instance').read_text().splitlines() == ['1000', str(legacy)]
-        assert (legacy / 'v1/credential-fixture').read_text() == 'preserve this credential'
-        print(f'PASS {kind}: package override preserves legacy state and supplies STATE_DIRECTORY', flush=True)
+        fixture = state / 'credential-fixture'
+        fixture.write_text('preserve this credential')
         remove = ['dpkg', '--remove', 'fidophir'] if kind == 'deb' else ['rpm', '-e', 'fidophir']
         run(*remove)
         wait(lambda: not active('fidophir@1000.service'))
-        assert state.exists() and (legacy / 'v1/credential-fixture').exists()
+        assert state.exists() and fixture.read_text() == 'preserve this credential'
         print(f'PASS {kind}: target restart/removal propagation and state retention', flush=True)
         if kind == 'deb':
             policy = Path('/usr/sbin/policy-rc.d')
@@ -162,7 +152,7 @@ def main(kind):
             policy.chmod(0o755)
         else:
             run('systemctl', 'mask', 'fidophir.target')
-        run(*install, str(third))
+        run(*install, str(second))
         assert not active('fidophir.target') and not active('fidophir@1000.service')
         print(f'PASS {kind}: policy denial/masked target prevents existing-login activation', flush=True)
         run(*remove)

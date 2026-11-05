@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+#[cfg(test)]
+extern crate alloc;
 pub mod approval;
 pub mod backend;
 pub mod env;
@@ -14,6 +16,10 @@ pub enum Error {
     Tpm(tss_esapi::Error),
     Invalid(&'static str),
     Desktop(glib::Error),
+    State {
+        path: std::path::PathBuf,
+        reason: String,
+    },
 }
 
 impl From<std::io::Error> for Error {
@@ -40,6 +46,7 @@ impl std::fmt::Display for Error {
             Self::Tpm(e) => write!(f, "TPM error: {e}"),
             Self::Invalid(e) => f.write_str(e),
             Self::Desktop(_) => f.write_str("desktop authorization failed"),
+            Self::State { path, reason } => write!(f, "state {path:?}: {reason}"),
         }
     }
 }

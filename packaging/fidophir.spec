@@ -49,13 +49,12 @@ mkdir -p %{buildroot}%{_licensedir}/%{name}/third-party
 cp -a build/licenses/. %{buildroot}%{_licensedir}/%{name}/third-party/
 
 %post
-%{_libexecdir}/fidophir-package-setup prepare systemctl
 %systemd_post fidophir.target
 # RPM presets configure enablement; first installation also activates this package.
 if [ "$1" -eq 1 ] && [ -d /run/systemd/system ] && systemctl --quiet is-enabled fidophir.target; then
     systemctl start fidophir.target || :
 fi
-%{_libexecdir}/fidophir-package-setup activate systemctl
+%{_libexecdir}/fidophir-package-setup systemctl
 
 %preun
 %systemd_preun fidophir.target

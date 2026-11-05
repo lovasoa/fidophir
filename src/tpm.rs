@@ -103,6 +103,32 @@ pub enum Kind {
     Signing,
 }
 
+#[cfg(test)]
+pub(crate) fn fixture_blob(kind: Kind) -> Blob {
+    // Structurally valid test object with the P-256 generator and dummy private
+    // bytes. It is not a usable TPM key and never reaches a hardware TPM.
+    let mut public = template(kind).unwrap();
+    if let Public::Ecc { unique, .. } = &mut public {
+        let coordinate = |hex: &str| {
+            EccParameter::try_from(
+                (0..hex.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap()
+        };
+        *unique = EccPoint::new(
+            coordinate("6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296"),
+            coordinate("4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5"),
+        );
+    }
+    Blob {
+        public,
+        private: Private::try_from(vec![1; 32]).unwrap(),
+    }
+}
+
 fn attributes(kind: Kind) -> tss_esapi::Result<ObjectAttributes> {
     let storage = matches!(kind, Kind::Root | Kind::Parent);
     ObjectAttributesBuilder::new()

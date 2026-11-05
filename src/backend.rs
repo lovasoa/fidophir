@@ -75,9 +75,6 @@ impl Backend {
             .spawn(move || {
                 let startup = (|| {
                     let store = Store::open(&root)?;
-                    if let Some(record) = store.read(PARENT)? {
-                        ParentRecord::decode(&record)?;
-                    }
                     Ok((Tpm::new(config)?, store))
                 })();
                 match startup {
@@ -141,7 +138,12 @@ impl Backend {
                         {
                             return Err(Status::CTAP2_ERR_PIN_AUTH_BLOCKED);
                         }
-                        Err(error) => fatal(error),
+                        Err(error) if durable => fatal(error),
+                        Err(error) => {
+                            eprintln!("fidophir: operation failed: {error}");
+                            self.0.grant.borrow_mut().take();
+                            return Err(Status::CTAP2_ERR_VENDOR_HARDWARE_FAILURE);
+                        }
                     };
                     if !durable && self.0.io.borrow().cancelled() {
                         return Err(Status::CTAP2_ERR_KEEPALIVE_CANCEL);
@@ -220,6 +222,10 @@ impl Persist for Backend {
     fn iter(&self) -> CtapResult<PersistIter<'_>> {
         let keys = self.run(false, |_, store| store.list())?;
         Ok(Box::new(keys.into_iter().filter(|k| *k <= 4095).map(Ok)))
+    }
+    fn free_credential_key(&self) -> CtapResult<usize> {
+        self.run(false, |_, store| store.free_credential_key())?
+            .ok_or(Status::CTAP2_ERR_KEY_STORE_FULL)
     }
     fn reset(&mut self) -> CtapResult<()> {
         Err(Status::CTAP2_ERR_NOT_ALLOWED)
