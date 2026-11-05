@@ -8,10 +8,12 @@ use crate::{
 };
 use opensk::{
     api::{
+        crypto::{aes256::Aes256, rust_crypto::SoftwareAes256},
         key_store::{self, CredentialSource, KeyStore},
         persist::{Persist, PersistIter},
     },
     ctap::{
+        crypto_wrapper::aes256_cbc_decrypt,
         secret::Secret,
         status_code::{Ctap2StatusCode as Status, CtapResult},
     },
@@ -26,19 +28,88 @@ use std::{
 use tss_esapi::{constants::response_code::Tss2ResponseCodeKind as RcKind, tcti_ldr::TctiNameConf};
 
 type Task = Box<dyn FnOnce(&mut Tpm, &Store) + Send>;
+/// `Persist::pin_hash` reports configuration, never a stored verifier.
+pub(crate) const CONFIGURED_PIN_MARKER: [u8; 16] = [0; 16];
+
+/// Pinned OpenSK uses a fixed, nonrolling 30-second token lifetime. Starting our
+/// lease before TPM verification makes it expire no later than that token.
+pub const PIN_AUTHORIZATION_LIFETIME_MS: u64 = 30_000;
+
 struct Grant {
-    hash: Secret<[u8; 16]>,
+    pin_hash: Secret<[u8; 16]>,
     master: Secret<[u8; 64]>,
+    expires_at_ms: u64,
+}
+
+/// Pending verification and earlier authorization are mutually exclusive.
+/// `Granted` permits TPM work, not bypassing OpenSK's token/permission checks.
+#[derive(Default)]
+enum PinAccess {
+    #[default]
+    None,
+    AwaitingKey(PinAttempt),
+    ReadyToVerify {
+        attempt: PinAttempt,
+        aes_key: Secret<[u8; 32]>,
+    },
+    Granted(Grant),
+}
+struct PinAttempt {
+    encrypted_hash: Vec<u8>,
+    /// Persisted counter value required before this attempt may reach the TPM.
+    expected_failure_count: u8,
+}
+
+impl PinAttempt {
+    fn assert_retry_was_charged(&self, actual_failure_count: u8) {
+        if actual_failure_count != self.expected_failure_count {
+            adapter_invariant("pin-verification", "retry-not-durably-charged");
+        }
+    }
+}
+
+impl PinAccess {
+    fn phase(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::AwaitingKey(_) => "awaiting-key",
+            Self::ReadyToVerify { .. } => "ready-to-verify",
+            Self::Granted(_) => "granted",
+        }
+    }
+}
+
+/// Makes the unusual KeyStore return semantics explicit at the conversion site.
+/// Rejection returns a value unequal to this exact candidate, never a constant
+/// that an attacker could choose as their candidate.
+enum TpmPinComparison {
+    Accepted(Secret<[u8; 16]>),
+    Rejected(Secret<[u8; 16]>),
+    MalformedCandidate,
+}
+impl TpmPinComparison {
+    fn into_opensk_expected_hash(self) -> Secret<[u8; 16]> {
+        match self {
+            Self::Accepted(hash) => hash,
+            Self::Rejected(mut hash) => {
+                hash[0] ^= 1;
+                hash
+            }
+            // Upstream cannot decrypt this request to a 16-byte candidate, so
+            // no returned 16-byte value can make its comparison succeed.
+            Self::MalformedCandidate => Secret::default(),
+        }
+    }
 }
 struct Inner {
     sender: Option<SyncSender<Task>>,
     worker: Option<std::thread::JoinHandle<()>>,
     io: SharedIo,
-    grant: RefCell<Option<Grant>>,
+    pin_access: RefCell<PinAccess>,
 }
 impl Drop for Inner {
     fn drop(&mut self) {
-        self.grant.get_mut().take();
+        *self.pin_access.get_mut() = PinAccess::None;
         self.sender.take();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -48,6 +119,26 @@ impl Drop for Inner {
 
 #[derive(Clone)]
 pub struct Backend(Rc<Inner>);
+
+/// Only static diagnostics: never format requests, hashes, keys, or enum payloads.
+#[track_caller]
+pub(crate) fn adapter_invariant(stage: &'static str, reason: &'static str) -> ! {
+    eprintln!(
+        "fidophir: fatal stage={stage} reason={reason} source={}",
+        std::panic::Location::caller()
+    );
+    std::process::exit(1)
+}
+
+#[track_caller]
+fn fatal_crypto(stage: &'static str, status: Status) -> ! {
+    eprintln!(
+        "fidophir: fatal stage={stage} status={} source={}",
+        status as u8,
+        std::panic::Location::caller()
+    );
+    std::process::exit(1)
+}
 
 fn fatal(message: impl std::fmt::Display) -> ! {
     eprintln!("fidophir: {message}");
@@ -98,7 +189,7 @@ impl Backend {
             sender: Some(sender),
             worker: Some(worker),
             io,
-            grant: RefCell::new(None),
+            pin_access: RefCell::new(PinAccess::None),
         })))
     }
 
@@ -141,7 +232,7 @@ impl Backend {
                         Err(error) if durable => fatal(error),
                         Err(error) => {
                             eprintln!("fidophir: operation failed: {error}");
-                            self.0.grant.borrow_mut().take();
+                            *self.0.pin_access.borrow_mut() = PinAccess::None;
                             return Err(Status::CTAP2_ERR_VENDOR_HARDWARE_FAILURE);
                         }
                     };
@@ -175,12 +266,51 @@ impl Backend {
     }
 
     fn hash(&self) -> CtapResult<Secret<[u8; 16]>> {
-        self.0
-            .grant
-            .borrow()
-            .as_ref()
-            .map(|g| g.hash.clone())
-            .ok_or(Status::CTAP2_ERR_PUAT_REQUIRED)
+        match &*self.0.pin_access.borrow() {
+            PinAccess::Granted(grant) => Ok(grant.pin_hash.clone()),
+            _ => Err(Status::CTAP2_ERR_PUAT_REQUIRED),
+        }
+    }
+
+    /// Starting an attempt always revokes older hardware authorization.
+    pub fn begin_pin_verification(&mut self, encrypted_hash: Vec<u8>) -> CtapResult<()> {
+        self.clear();
+        let expected_failure_count = self.pin_fails()?.saturating_add(1);
+        *self.0.pin_access.borrow_mut() = PinAccess::AwaitingKey(PinAttempt {
+            encrypted_hash,
+            expected_failure_count,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn observe_pin_aes_key(&self, key: &[u8; 32]) {
+        let mut access = self.0.pin_access.borrow_mut();
+        if matches!(&*access, PinAccess::AwaitingKey(_)) {
+            let PinAccess::AwaitingKey(attempt) = std::mem::take(&mut *access) else {
+                unreachable!();
+            };
+            *access = PinAccess::ReadyToVerify {
+                attempt,
+                aes_key: Secret::from_exposed_secret(*key),
+            };
+        } else if matches!(&*access, PinAccess::ReadyToVerify { .. }) {
+            adapter_invariant("pin-key-observation", "duplicate-pin-key");
+        }
+        // Other commands may derive the same kind of key (e.g. hmac-secret).
+        // Without an armed PIN attempt they must not create authorization.
+    }
+
+    pub fn has_pin_authorization(&self) -> bool {
+        matches!(&*self.0.pin_access.borrow(), PinAccess::Granted(_))
+    }
+
+    /// Call between commands only. OpenSK admits a command using its entry-time
+    /// token validity, including commands that wait for desktop approval.
+    pub fn expire_pin_authorization(&self, now_ms: u64) {
+        let mut access = self.0.pin_access.borrow_mut();
+        if matches!(&*access, PinAccess::Granted(grant) if now_ms >= grant.expires_at_ms) {
+            *access = PinAccess::None;
+        }
     }
 
     pub fn generate(&self) -> CtapResult<Blob> {
@@ -234,9 +364,9 @@ impl Persist for Backend {
         Ok(0)
     }
     fn pin_hash(&self) -> CtapResult<Option<[u8; 16]>> {
-        // Opaque configured-PIN marker, never a verifier or authorization.
-        // Candidates use Env::verify_pin; decryption requires an existing grant.
-        Ok(self.is_set()?.then_some([0; 16]))
+        // A configured-PIN marker, never a software verifier or authorization.
+        // KeyStore::decrypt_pin_hash checks this identity before adapting it.
+        Ok(self.is_set()?.then_some(CONFIGURED_PIN_MARKER))
     }
     fn set_pin(&mut self, hash: &[u8; 16], length: u8) -> CtapResult<()> {
         if !(4..=63).contains(&length) {
@@ -272,8 +402,9 @@ impl Backend {
             .map(|r| r.is_some())
             .map_err(|_| Status::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
     }
-    pub fn verify(&mut self, hash: &[u8; 16]) -> CtapResult<bool> {
+    fn verify(&mut self, hash: &[u8; 16]) -> CtapResult<bool> {
         self.clear();
+        let expires_at_ms = boot_ms().saturating_add(PIN_AUTHORIZATION_LIFETIME_MS);
         let record = self.parent()?;
         let hash = Secret::from_exposed_secret(*hash);
         let input = hash.clone();
@@ -288,14 +419,60 @@ impl Backend {
             Err(e) => Err(e),
         })?;
         if let Some(master) = answer {
-            *self.0.grant.borrow_mut() = Some(Grant { hash, master });
+            *self.0.pin_access.borrow_mut() = PinAccess::Granted(Grant {
+                pin_hash: hash,
+                master,
+                expires_at_ms,
+            });
             Ok(true)
         } else {
             Ok(false)
         }
     }
+    fn verify_candidate_for_opensk_comparison(&mut self) -> CtapResult<TpmPinComparison> {
+        // Taking ownership both revokes pending access on error and releases the
+        // RefCell borrow before TPM work pumps desktop callbacks.
+        let access = self.0.pin_access.take();
+        let (attempt, aes_key) = match access {
+            PinAccess::Granted(grant) => {
+                // A new attempt discarded the previous grant, so this can only
+                // be ChangePIN's later read of this command's accepted old PIN.
+                let hash = grant.pin_hash.clone();
+                *self.0.pin_access.borrow_mut() = PinAccess::Granted(grant);
+                return Ok(TpmPinComparison::Accepted(hash));
+            }
+            PinAccess::ReadyToVerify { attempt, aes_key } => (attempt, aes_key),
+            other => {
+                eprintln!(
+                    "fidophir: fatal stage=pin-hash-decryption expected=ready-to-verify-or-granted actual={}",
+                    other.phase()
+                );
+                adapter_invariant("pin-hash-decryption", "unexpected-pin-access-state")
+            }
+        };
+        // Refuse to guess even once if an OpenSK upgrade skipped or reordered
+        // retry charging. Storage guarantees this visible write is durable.
+        attempt.assert_retry_was_charged(self.pin_fails()?);
+        // Use the upstream v2 CBC helper, including its IV framing. A malformed
+        // ciphertext cannot decrypt to 16 bytes in either copy of the operation;
+        // return an arbitrary 16-byte value so upstream runs its mismatch path.
+        let key = SoftwareAes256::new(&aes_key);
+        let decrypted =
+            match aes256_cbc_decrypt::<crate::env::LinuxEnv>(&key, &attempt.encrypted_hash, true) {
+                Ok(hash) if hash.len() == 16 => hash,
+                _ => return Ok(TpmPinComparison::MalformedCandidate),
+            };
+        let mut candidate = Secret::<[u8; 16]>::default();
+        candidate.copy_from_slice(&decrypted);
+        if self.verify(&candidate)? {
+            Ok(TpmPinComparison::Accepted(candidate))
+        } else {
+            Ok(TpmPinComparison::Rejected(candidate))
+        }
+    }
+
     pub fn clear(&mut self) {
-        self.0.grant.borrow_mut().take();
+        *self.0.pin_access.borrow_mut() = PinAccess::None;
     }
 }
 
@@ -321,8 +498,10 @@ impl KeyStore for Backend {
         Ok(None)
     }
     fn cred_random(&mut self, uv: bool) -> std::result::Result<Secret<[u8; 32]>, key_store::Error> {
-        let grant = self.0.grant.borrow();
-        let grant = grant.as_ref().ok_or(key_store::Error)?;
+        let access = self.0.pin_access.borrow();
+        let PinAccess::Granted(grant) = &*access else {
+            return Err(key_store::Error);
+        };
         let mut key = Secret::<[u8; 32]>::default();
         let offset = if uv { 32 } else { 0 };
         key.copy_from_slice(&grant.master[offset..offset + 32]);
@@ -335,12 +514,28 @@ impl KeyStore for Backend {
         // Passed directly to set_pin, which authorizes/wraps in TPM; never stored.
         Ok(*plain)
     }
+    /// Adapt OpenSK's stored-verifier comparison to TPM PIN verification.
+    ///
+    /// We persist only CONFIGURED_PIN_MARKER. In the pinned OpenSK, a durable
+    /// retry decrement precedes this callback; its result is then compared with
+    /// the independently decrypted candidate. Return that candidate only after
+    /// TPM acceptance, or a guaranteed mismatch on rejection, so OpenSK keeps
+    /// its normal wrong-PIN counters and lockout behavior. The later same-PIN
+    /// policy check during ChangePIN reads this command's accepted hash again.
+    ///
+    /// This intentionally diverges from KeyStore's decryption semantics. An
+    /// OpenSK update that changes ordering, call sites, or ClientPIN derivation
+    /// requires re-auditing the adapter contract and its regression tests.
     fn decrypt_pin_hash(
         &mut self,
-        _: &[u8; 16],
+        configured_pin_marker: &[u8; 16],
     ) -> std::result::Result<Secret<[u8; 16]>, key_store::Error> {
-        // Only for same-PIN checks after hardware verification, never verification.
-        self.hash().map_err(|_| key_store::Error)
+        if configured_pin_marker != &CONFIGURED_PIN_MARKER {
+            adapter_invariant("pin-hash-decryption", "unexpected-configured-pin-marker");
+        }
+        self.verify_candidate_for_opensk_comparison()
+            .map(TpmPinComparison::into_opensk_expected_hash)
+            .map_err(|_| key_store::Error)
     }
 }
 
@@ -358,7 +553,14 @@ impl opensk::api::crypto::ec_signing::EcSecretKey for SigningKey {
     type PublicKey = VerifyingKey;
     type Signature = Signature;
     fn random(_: &mut impl opensk::api::rng::Rng) -> Self {
-        fatal("credential generation requires the platform key hook")
+        // OpenSK supplies no Env and no error return here. Never substitute a
+        // software key or placeholder: a hardware failure ends this process.
+        let backend = crate::opensk_adapter::scope::current_backend();
+        Self(
+            backend
+                .generate()
+                .unwrap_or_else(|status| fatal_crypto("credential-generation", status)),
+        )
     }
     fn public_key(&self) -> VerifyingKey {
         VerifyingKey(
@@ -367,8 +569,13 @@ impl opensk::api::crypto::ec_signing::EcSecretKey for SigningKey {
                 .expect("validated Trusted Platform Module point"),
         )
     }
-    fn sign(&self, _: &[u8]) -> Signature {
-        fatal("credential signing requires the platform key hook")
+    fn sign(&self, message: &[u8]) -> Signature {
+        let backend = crate::opensk_adapter::scope::current_backend();
+        Signature(
+            backend
+                .sign(&self.0, message)
+                .unwrap_or_else(|status| fatal_crypto("credential-signing", status)),
+        )
     }
     fn export(&self) -> Vec<u8> {
         self.0
@@ -379,16 +586,6 @@ impl opensk::api::crypto::ec_signing::EcSecretKey for SigningKey {
         let blob = Blob::decode(bytes, Kind::Signing).ok()?;
         blob.verifying_key().ok()?;
         Some(Self(blob))
-    }
-}
-impl SigningKey {
-    pub fn generate(backend: &Backend) -> CtapResult<Self> {
-        backend.generate().map(Self)
-    }
-    pub fn sign_with(&self, backend: &Backend, message: &[u8]) -> CtapResult<Vec<u8>> {
-        backend
-            .sign(&self.0, message)
-            .map(|signature| signature.to_der().as_bytes().to_vec())
     }
 }
 impl opensk::api::crypto::ec_signing::EcPublicKey for VerifyingKey {
@@ -402,5 +599,131 @@ impl opensk::api::crypto::ec_signing::EcPublicKey for VerifyingKey {
 impl opensk::api::crypto::ec_signing::EcSignature for Signature {
     fn to_der(&self) -> Vec<u8> {
         self.0.to_der().as_bytes().to_vec()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use opensk::api::crypto::{hkdf256::Hkdf256, rust_crypto::SoftwareHkdf256};
+
+    // No worker or hardware: an accidental TPM/storage operation fails instead
+    // of silently satisfying these tests through a mocked verification result.
+    fn backend_without_worker() -> Backend {
+        Backend(Rc::new(Inner {
+            sender: None,
+            worker: None,
+            io: crate::io::Io::shared(),
+            pin_access: RefCell::new(PinAccess::None),
+        }))
+    }
+
+    fn grant(expires_at_ms: u64) -> PinAccess {
+        PinAccess::Granted(Grant {
+            pin_hash: Secret::from_exposed_secret([0x42; 16]),
+            master: Secret::from_exposed_secret([0x24; 64]),
+            expires_at_ms,
+        })
+    }
+
+    #[test]
+    fn same_pin_policy_read_reuses_verified_hash_without_tpm_work() {
+        let mut backend = backend_without_worker();
+        *backend.0.pin_access.borrow_mut() = grant(100);
+        assert_eq!(
+            &*backend.decrypt_pin_hash(&CONFIGURED_PIN_MARKER).unwrap(),
+            &[0x42; 16]
+        );
+        assert!(backend.has_pin_authorization());
+        backend.expire_pin_authorization(99);
+        assert!(backend.has_pin_authorization());
+        backend.expire_pin_authorization(100);
+        assert!(!backend.has_pin_authorization());
+    }
+
+    #[test]
+    fn hkdf_observation_preserves_crypto_and_requires_the_current_pin_request() {
+        use crate::opensk_adapter::scope::{PinProtocolHkdf256, with_backend};
+        let backend = backend_without_worker();
+        let mut expected = [0; 32];
+        let mut actual = [0; 32];
+        SoftwareHkdf256::hkdf_empty_salt_256(&[0x21; 32], b"CTAP2 AES key", &mut expected);
+        with_backend(&backend, || {
+            // A real PIN-protocol key outside a pending request grants nothing.
+            PinProtocolHkdf256::hkdf_empty_salt_256(&[0x21; 32], b"CTAP2 AES key", &mut actual);
+            assert_eq!(actual, expected);
+            assert!(!backend.has_pin_authorization());
+            assert!(matches!(&*backend.0.pin_access.borrow(), PinAccess::None));
+
+            *backend.0.pin_access.borrow_mut() = PinAccess::AwaitingKey(PinAttempt {
+                encrypted_hash: vec![0; 32],
+                expected_failure_count: 1,
+            });
+            PinProtocolHkdf256::hkdf_empty_salt_256(&[0x21; 32], b"CTAP2 HMAC key", &mut actual);
+            assert!(matches!(
+                &*backend.0.pin_access.borrow(),
+                PinAccess::AwaitingKey(_)
+            ));
+            PinProtocolHkdf256::hkdf_empty_salt_256(&[0x21; 32], b"CTAP2 AES key", &mut actual);
+            assert_eq!(actual, expected);
+            match &*backend.0.pin_access.borrow() {
+                PinAccess::ReadyToVerify { aes_key, .. } => assert_eq!(&**aes_key, &expected),
+                _ => panic!("PIN key was not captured"),
+            }
+            assert!(!backend.has_pin_authorization());
+        });
+    }
+
+    #[test]
+    fn wrong_configured_pin_marker_fails_with_sanitized_diagnostic() {
+        const CHILD: &str = "FIDOPHIR_TEST_WRONG_PIN_MARKER";
+        if std::env::var_os(CHILD).is_some() {
+            let mut backend = backend_without_worker();
+            // Even an existing grant must not bypass the marker identity check.
+            *backend.0.pin_access.borrow_mut() = grant(100);
+            let _ = backend.decrypt_pin_hash(&[0xa5; 16]);
+            panic!("unexpected marker was accepted");
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "backend::tests::wrong_configured_pin_marker_fails_with_sanitized_diagnostic",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostic.contains("stage=pin-hash-decryption"));
+        assert!(diagnostic.contains("reason=unexpected-configured-pin-marker"));
+        assert!(diagnostic.contains("source="));
+        assert!(!diagnostic.contains("[165,"));
+    }
+    #[test]
+    fn uncharged_pin_attempt_terminates_before_candidate_verification() {
+        const CHILD: &str = "FIDOPHIR_TEST_UNCHARGED_PIN";
+        if std::env::var_os(CHILD).is_some() {
+            let pending = PinAttempt {
+                encrypted_hash: vec![0xa5; 32],
+                expected_failure_count: 1,
+            };
+            pending.assert_retry_was_charged(0);
+            panic!("uncharged PIN attempt was accepted");
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "backend::tests::uncharged_pin_attempt_terminates_before_candidate_verification",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(diagnostic.contains("stage=pin-verification"));
+        assert!(diagnostic.contains("reason=retry-not-durably-charged"));
+        assert!(!diagnostic.contains("[165,"));
     }
 }

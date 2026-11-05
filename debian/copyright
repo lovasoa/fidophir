@@ -2,7 +2,7 @@ Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: fidophir
 Source: https://github.com/lovasoa/fidophir
 
-Files: src/* tools/* patches/* packaging/* Makefile Cargo.toml
+Files: src/* tools/* packaging/* Makefile Cargo.toml
 Copyright: 2026 fidophir contributors
 License: Apache-2.0
  The imported runtime source carries Apache-2.0 SPDX identifiers.

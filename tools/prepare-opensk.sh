@@ -1,5 +1,5 @@
 #!/bin/sh
-# Keep the pinned upstream checkout untouched; patched sources are build outputs.
+# Copy the pinned upstream libraries without changing their source files.
 set -eu
 cd "$(dirname "$0")/.."
 test -f vendor/OpenSK/libraries/opensk/Cargo.toml || {
@@ -11,6 +11,6 @@ for crate in opensk cbor; do
     rm -rf "build/$crate"
     cp -R "vendor/OpenSK/libraries/$crate" "build/$crate"
 done
-git apply --directory=build/opensk --check patches/opensk.patch
-git apply --directory=build/opensk patches/opensk.patch
+# The standalone upstream crate has no suitable deployment lockfile. Keep our
+# audited dependency resolution separately; this is the only prepared-file change.
 cp locks/opensk.Cargo.lock build/opensk/Cargo.lock

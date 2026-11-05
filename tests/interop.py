@@ -25,9 +25,10 @@ from fido2 import cbor
 
 
 class Pipe(CtapDevice):
-    def __init__(self, binary, root, tcti, decision="allow"):
+    def __init__(self, binary, root, tcti, decision="allow", capture_stderr=False):
         self.proc = subprocess.Popen([str(binary), str(root), tcti, decision],
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE if capture_stderr else None)
 
     @property
     def capabilities(self):
@@ -60,6 +61,21 @@ class Pipe(CtapDevice):
             self.proc.stdin.close()
         assert self.proc.wait(timeout=15) == expected
         self.proc.stdout.close()
+
+
+def expect_fail_stop(pipe, operation):
+    """An infallible OpenSK crypto callback must stop rather than fabricate output."""
+    try:
+        operation()
+    except RuntimeError as error:
+        assert "Rust test bridge exited" in str(error), error
+    else:
+        raise AssertionError("hardware failure emitted a protocol response instead of stopping")
+    pipe.close(expected=1)
+    diagnostics = pipe.proc.stderr.read().decode()
+    pipe.proc.stderr.close()
+    assert "fatal" in diagnostics and "sign" in diagnostics, diagnostics
+    return diagnostics
 
 
 def expect(code, fn):
@@ -119,6 +135,14 @@ def free_ports():
     raise RuntimeError("no simulator port pair")
 
 
+def tpm_dictionary_attack_counter(tcti):
+    properties = subprocess.check_output(
+        ["tpm2_getcap", "-T", tcti, "properties-variable"], text=True)
+    counter = re.search(r"TPM2_PT_LOCKOUT_COUNTER:\s*(0x[0-9a-fA-F]+|\d+)", properties)
+    assert counter, "simulator did not report its dictionary-attack counter"
+    return int(counter[1], 0)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, required=True)
@@ -159,9 +183,7 @@ def main():
                 print("PASS: native ClientPIN v2 setup", flush=True)
 
                 expect(CtapError.ERR.PIN_INVALID, lambda: authorize(ctap, "wrongpin", ClientPin.PERMISSION.MAKE_CREDENTIAL, "example.test"))
-                variable = subprocess.check_output(["tpm2_getcap", "-T", tcti, "properties-variable"],text=True)
-                counter = re.search(r"TPM2_PT_LOCKOUT_COUNTER:\s*(0x[0-9a-fA-F]+|\d+)",variable)
-                assert counter and int(counter[1],0) >= 1, "wrong PIN did not reach TPM DA protection"
+                assert tpm_dictionary_attack_counter(tcti) >= 1, "wrong PIN did not reach TPM DA protection"
                 print("PASS: incorrect PIN rejected by hardware authorization; DA counter increased", flush=True)
 
                 # The public configured-PIN marker is all zeroes; submitting it
@@ -172,15 +194,32 @@ def main():
                     client.protocol.VERSION,ClientPin.CMD.GET_TOKEN_USING_PIN,
                     key_agreement=agreement,pin_hash_enc=client.protocol.encrypt(secret,bytes(16)),
                     permissions=ClientPin.PERMISSION.MAKE_CREDENTIAL,permissions_rpid="example.test"))
-                variable = subprocess.check_output(["tpm2_getcap","-T",tcti,"properties-variable"],text=True)
-                counter = re.search(r"TPM2_PT_LOCKOUT_COUNTER:\s*(0x[0-9a-fA-F]+|\d+)",variable)
-                assert counter and int(counter[1],0) >= 2, "configured-PIN marker bypassed TPM verification"
+                assert tpm_dictionary_attack_counter(tcti) >= 2, "configured-PIN marker bypassed TPM verification"
                 print("PASS: configured-PIN marker cannot authorize; zero candidate is rejected by TPM",flush=True)
 
                 first = register(ctap,pin,b"first-account")
                 second = register(ctap,pin,b"second-account")
                 sign(ctap,pin,first)
                 sign(ctap,pin,second)
+                # Only a genuine sixteen-byte candidate may reach the TPM. The
+                # adapter must leave OpenSK's ordinary mismatch path intact for
+                # invalid ciphertext and valid ciphertext of the wrong length.
+                hardware_attempts = tpm_dictionary_attack_counter(tcti)
+                for shape in ("empty", "partial-block", "long-plaintext"):
+                    client = ClientPin(ctap)
+                    agreement, secret = client._get_shared_secret()
+                    encrypted = {"empty": b"", "partial-block": b"x",
+                                 "long-plaintext": client.protocol.encrypt(secret, bytes(32))}[shape]
+                    retries = client.get_pin_retries()[0]
+                    expect(CtapError.ERR.PIN_INVALID, lambda: ctap.client_pin(
+                        client.protocol.VERSION, ClientPin.CMD.GET_TOKEN_USING_PIN,
+                        key_agreement=agreement, pin_hash_enc=encrypted,
+                        permissions=ClientPin.PERMISSION.GET_ASSERTION,
+                        permissions_rpid="example.test"))
+                    assert client.get_pin_retries()[0] == retries - 1
+                    sign(ctap, pin, first)  # Fresh request cannot reuse captured key/candidate.
+                assert tpm_dictionary_attack_counter(tcti) == hardware_attempts
+                print("PASS: malformed PIN ciphertext consumes retries and cannot poison the next request", flush=True)
                 if args.capacity:
                     pipe.close(); pipe = None
                     records = state / "v2" / "credentials"
@@ -239,9 +278,12 @@ def main():
                 assert not force.exists(), "successful PIN change did not clear forced-change state"
                 assert before == {str(f.relative_to(state)): f.read_bytes() for f in (state / "v2/credentials").rglob("*") if f.is_file()}
                 sign(ctap,new_pin,first)
+                protocol, token = authorize(ctap, new_pin, ClientPin.PERMISSION.CREDENTIAL_MGMT)
                 pipe.close(); pipe = None
                 pipe = Pipe(args.binary,state,tcti)
                 ctap = Ctap2(pipe)
+                expect(CtapError.ERR.PIN_AUTH_INVALID,
+                       lambda: CredentialManagement(ctap, protocol, token).get_metadata())
                 expect(CtapError.ERR.PIN_INVALID,lambda:authorize(ctap,pin,ClientPin.PERMISSION.GET_ASSERTION,"example.test"))
                 sign(ctap,new_pin,first)
                 print("PASS: PIN change preserves credential blobs and survives process restart",flush=True)
@@ -253,6 +295,17 @@ def main():
                 credentials = manager.enumerate_creds(rps[0][CredentialManagement.RESULT.RP_ID_HASH])
                 assert len(credentials) == 2
                 print("PASS: standard credential-management enumeration",flush=True)
+
+                # Unpatched OpenSK retains its old token after a failed PIN
+                # attempt. Clearing only the TPM grant would leave metadata
+                # operations usable: they do not sign or load a TPM key.
+                expect(CtapError.ERR.PIN_INVALID, lambda: authorize(
+                    ctap, "wrongpin", ClientPin.PERMISSION.CREDENTIAL_MGMT))
+                expect(CtapError.ERR.PIN_AUTH_INVALID, manager.get_metadata)
+                expect(CtapError.ERR.PIN_AUTH_INVALID, lambda: manager.delete_cred(
+                    {"id": first.credential_id, "type": "public-key"}))
+                sign(ctap, new_pin, first)
+                print("PASS: revoked host authorization blocks stale-token metadata reads and deletion", flush=True)
 
                 disposable = register(ctap, new_pin, b"delete-me")
                 protocol, token = authorize(ctap, new_pin, ClientPin.PERMISSION.CREDENTIAL_MGMT)
@@ -288,24 +341,39 @@ def main():
                 sign(ctap, new_pin, first)
                 print("PASS: admin deletion survives restart; directory restore works", flush=True)
 
-                # Structurally valid but cryptographically damaged TPM private data
-                # fails this operation without taking down healthy credentials.
+                # OpenSK's signing interface cannot report hardware failure.
+                # A structurally valid but damaged TPM key must therefore stop
+                # the process, with no fabricated response, and recover on restart.
+                pipe.close(); pipe = None
+                pipe = Pipe(args.binary, state, tcti, capture_stderr=True)
+                ctap = Ctap2(pipe)
                 record_file = directory / "tpm-signing-blob.bin"
                 original = record_file.read_bytes()
                 wrapped = cbor.decode(original)
                 damaged = bytearray(wrapped[2]); damaged[-1] ^= 1; wrapped[2] = bytes(damaged)
                 record_file.write_bytes(cbor.encode(wrapped))
-                expect(0xF3, lambda: sign(ctap, new_pin, first))
+                diagnostics = expect_fail_stop(pipe, lambda: sign(ctap, new_pin, first))
+                pipe = None
+                assert new_pin not in diagnostics and "example.test" not in diagnostics
+                # This private simulator uses raw TCP, without the kernel TPM
+                # resource manager used by production /dev/tpmrm0. Emulate its
+                # close-time object cleanup after the intentional abrupt exit.
+                # Never do this against a physical/shared TPM.
+                subprocess.run(["tpm2_flushcontext", "-T", tcti, "-t"], check=True)
+                pipe = Pipe(args.binary, state, tcti)
+                ctap = Ctap2(pipe)
                 sign(ctap, new_pin, second)
                 record_file.write_bytes(original)
                 sign(ctap, new_pin, first)
-                print("PASS: TPM key failure is contained; healthy and repaired credentials still sign", flush=True)
+                print("PASS: signing hardware failure stops safely; restart restores healthy and repaired credentials", flush=True)
 
                 # Simulate missing shared state while running. Never silently
                 # provision a new parent that would orphan the remaining keys.
                 parent_file = state / "v2/authenticator/tpm-parent.bin"
                 current_parent = parent_file.read_bytes()
                 parent_file.unlink()
+                # The configured-PIN query fails before the KeyStore callback,
+                # so this still exposes the backend's hardware-failure status.
                 expect(0xF3, lambda: authorize(ctap, new_pin, ClientPin.PERMISSION.GET_ASSERTION, "example.test"))
                 fd = os.open(parent_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                 with os.fdopen(fd, "wb") as output:

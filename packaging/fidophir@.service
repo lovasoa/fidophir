@@ -6,8 +6,8 @@ PartOf=user@%i.service fidophir.target
 BindsTo=fidophir.target
 After=fidophir.target
 After=user@%i.service
-StartLimitIntervalSec=60
-StartLimitBurst=3
+# Keep retrying after fail-stop adapter errors; the delay bounds crash loops.
+StartLimitIntervalSec=0
 
 [Service]
 Type=exec

@@ -5,14 +5,18 @@ BINARY ?= $(TARGET_DIR)/release/fidophir
 DESTDIR ?=
 PREFIX ?= /usr
 
-.PHONY: prepare build test integration integration-hid install
+.PHONY: prepare check-opensk build test integration integration-hid install
 prepare:
 	sh tools/prepare-opensk.sh
+
+check-opensk:
+	python3 tools/check-opensk.py
 
 build: prepare
 	$(CARGO) build --locked --release --bin fidophir --target-dir $(TARGET_DIR)
 
 test: prepare
+	$(MAKE) check-opensk
 	bash tests/packaging.sh
 	$(CARGO) test --locked --lib --target-dir $(TARGET_DIR)
 	$(CARGO) test --locked --manifest-path build/opensk/Cargo.toml --no-default-features --features std --lib --target-dir $(TARGET_DIR)
@@ -40,6 +44,5 @@ install:
 	install -Dm755 packaging/fidophir-package-setup $(DESTDIR)$(PREFIX)/libexec/fidophir-package-setup
 	install -Dm644 packaging/org.local.fidophir.policy $(DESTDIR)$(PREFIX)/share/polkit-1/actions/org.local.fidophir.policy
 	install -Dm644 -t $(DESTDIR)$(PREFIX)/share/doc/fidophir README.md DESIGN.md VALIDATION.md
-	install -Dm644 -t $(DESTDIR)$(PREFIX)/share/doc/fidophir/patches patches/README.md patches/FILES patches/opensk.patch
 	install -Dm644 packaging/README.md $(DESTDIR)$(PREFIX)/share/doc/fidophir/packaging/README.md
 	install -Dm644 -t $(DESTDIR)$(PREFIX)/share/licenses/fidophir LICENSE LICENSE-APACHE

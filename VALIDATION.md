@@ -19,6 +19,14 @@ The v2 layout passed host unit tests and the existing OpenSK and packaging suite
 
 A release-build benchmark on this machine's Btrfs/NVMe filesystem used 300 synthetic credentials and the real OpenSK lookup code and worker. Across 400 cached lookups with roughly 800-byte and 4096-byte records, median full scans took 7.6–8.5 ms and the largest observed sample was 21.1 ms. Twenty trials requesting file-data cache eviction had medians of 11.5–13.0 ms; filesystem metadata remained cached. These are measurements, not worst-case latency bounds. TPM signing and desktop approval were outside the timed interval. Physical acceptance and power-loss qualification of v2 remain pending.
 
+## Unmodified OpenSK adapter checks on 5 November 2026
+
+The host's 11 unit tests and all 346 unmodified OpenSK library tests passed, as did formatting, Clippy with warnings denied, the source-equivalence check and an optimized production build. Adapter tests cover the configured-PIN marker, retry-charge invariant failure diagnostics, unchanged HKDF output/request isolation, same-PIN hash reuse without another TPM call, and grant expiry.
+
+The independent FIDO client and disposable software TPM passed the full suite with real 31-second expiry and 300-credential capacity. Added cases cover malformed encrypted candidates without TPM attempts, stale-token metadata reads/deletes after host revocation, tokens after restart, sanitized fail-stop signing errors, and recovery of healthy/repaired credentials. The private D-Bus desktop suite also passed. The raw TCP simulator needs transient-handle cleanup after an intentional crash; the fixture performs it only in that private simulator to model production's kernel TPM resource manager.
+
+Real package lifecycle fixtures passed in disposable rootless Fedora 44 and Debian 13 systemd containers, including four consecutive crashes followed by automatic recovery under the production restart policy. These fixtures replace the authenticator worker, so they do not establish hardware or browser recovery. Physical UHID rediscovery, kernel TPM resource cleanup, and cancellation during an infallible signing callback still need acceptance testing. A cancellation reaching those infallible methods can restart the service.
+
 ## Physical checks on 4 November 2026
 
 On this Fedora 44 GNOME desktop with Firefox 159, a locally built RPM was installed, upgraded, removed and reinstalled. Removal stopped the service, removed its virtual device and restored `/dev/uhid` to root:root mode 0600. State and the service account were retained. The generated hidraw device was owned by the desktop UID, group root, mode 0600 without an extra ACL. An independent FIDO client read its GetInfo response.
