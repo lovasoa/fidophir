@@ -159,6 +159,15 @@ impl LinuxEnv {
     pub(crate) fn command_was_cancelled(&self) -> bool {
         self.connection.0.borrow().cancelled()
     }
+
+    pub(crate) fn refresh_credential_capacity(&mut self) -> CtapResult<()> {
+        // OpenSK subtracts readable credentials from this limit. Reserve the
+        // slots hidden from its iterator so both reporting and admission agree
+        // with the host's allocation policy.
+        self.profile.max_supported_resident_keys = opensk::api::persist::keys::CREDENTIALS.len()
+            - self.backend.damaged_credential_count()?;
+        Ok(())
+    }
 }
 
 impl Env for LinuxEnv {

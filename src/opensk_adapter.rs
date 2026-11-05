@@ -95,8 +95,18 @@ impl Authenticator {
         let backend = env.backend.clone();
         scope::with_backend(&backend, || {
             env.set_approval_context(None, None);
-            let prepared = Command::deserialize(bytes)
-                .and_then(|command| prepare_command(env, &command, channel));
+            let prepared = Command::deserialize(bytes).and_then(|command| {
+                let authorization = prepare_command(env, &command, channel)?;
+                if matches!(
+                    command,
+                    Command::AuthenticatorGetInfo
+                        | Command::AuthenticatorMakeCredential(_)
+                        | Command::AuthenticatorCredentialManagement(_)
+                ) {
+                    env.refresh_credential_capacity()?;
+                }
+                Ok(authorization)
+            });
             let mut response = match &prepared {
                 Ok(_) => self.state.process_command(env, bytes, channel),
                 Err(status) => vec![*status as u8],

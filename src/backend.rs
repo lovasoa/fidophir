@@ -146,6 +146,9 @@ fn fatal(message: impl std::fmt::Display) -> ! {
 }
 
 impl Backend {
+    pub(crate) fn damaged_credential_count(&self) -> CtapResult<usize> {
+        self.run(false, |_, store| store.damaged_credential_count())
+    }
     pub fn new(root: PathBuf, io: SharedIo) -> Result<Self> {
         Self::start(root, "device:/dev/tpmrm0".parse()?, io)
     }

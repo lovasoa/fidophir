@@ -326,6 +326,20 @@ impl Store {
         }
         Ok(None)
     }
+    /// Occupied slots that OpenSK's credential iterator cannot read.
+    pub fn damaged_credential_count(&self) -> Result<usize> {
+        let mut count = 0;
+        for key in self
+            .list()?
+            .into_iter()
+            .filter(|key| CREDENTIALS.contains(key))
+        {
+            if self.read(key)?.is_none() {
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
     pub fn write(&self, key: usize, bytes: &[u8]) -> Result<()> {
         let path = self.key_path(key)?;
         if !CREDENTIALS.contains(&key) {

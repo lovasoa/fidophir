@@ -319,14 +319,32 @@ def main():
                                  if f.read_bytes() == first.credential_id)
                 metadata = directory / "metadata.ini"
                 original_metadata = metadata.read_bytes()
+                remaining = ctap.get_info().remaining_disc_creds
                 metadata.write_text("[broken INI")
+                assert ctap.get_info().remaining_disc_creds == remaining
+                protocol, token = authorize(ctap, new_pin, ClientPin.PERMISSION.CREDENTIAL_MGMT)
+                assert CredentialManagement(ctap, protocol, token).get_metadata()[CredentialManagement.RESULT.MAX_REMAINING_COUNT] == remaining
                 expect(CtapError.ERR.NO_CREDENTIALS, lambda: sign(ctap, new_pin, first))
                 sign(ctap, new_pin, second)
                 pipe.close(); pipe = None
                 pipe = Pipe(args.binary, state, tcti)
                 ctap = Ctap2(pipe)
+                assert ctap.get_info().remaining_disc_creds == remaining
                 sign(ctap, new_pin, second)
+                # Every occupied slot, including malformed ones, reserves capacity.
+                credentials_dir = state / "v2/credentials"
+                added = []
+                for i in range(300):
+                    slot = credentials_dir / f"{i:05}"
+                    if not slot.exists():
+                        slot.mkdir(mode=0o700)
+                        added.append(slot)
+                assert ctap.get_info().remaining_disc_creds == 0
+                expect(CtapError.ERR.KEY_STORE_FULL, lambda: register(ctap, new_pin, b"full-damaged"))
+                for slot in added:
+                    slot.rmdir()
                 metadata.write_bytes(original_metadata)
+                assert ctap.get_info().remaining_disc_creds == remaining
                 sign(ctap, new_pin, first)
                 print("PASS: malformed metadata isolated across restart; repair takes effect immediately", flush=True)
 
