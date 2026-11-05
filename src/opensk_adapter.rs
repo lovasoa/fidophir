@@ -109,7 +109,10 @@ impl Authenticator {
                 response = vec![Status::CTAP2_ERR_KEEPALIVE_CANCEL as u8];
             }
             finish_command(env, prepared.ok(), &response);
-            interaction.finish(response.first().copied().unwrap_or(0xf2), quiet);
+            interaction.finish(
+                crate::logging::ResponseStatus::from_response(&response),
+                quiet,
+            );
             response
         })
     }

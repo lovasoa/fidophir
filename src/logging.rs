@@ -3,6 +3,7 @@
 use opensk::ctap::{
     command::Command,
     data_formats::{ClientPinSubCommand, CredentialManagementSubCommand},
+    status_code::Ctap2StatusCode as Status,
 };
 use std::{
     cell::Cell,
@@ -72,18 +73,14 @@ impl Interaction {
             start: Instant::now(),
         }
     }
-    pub fn finish(self, status: u8, quiet: bool) {
-        if !quiet || status != 0 {
-            let level = if status == 0 || matches!(status, 0x27 | 0x2d | 0x2f) {
-                log::Level::Info
-            } else {
-                log::Level::Warn
-            };
+    pub(crate) fn finish(self, status: ResponseStatus, quiet: bool) {
+        if !quiet || status != ResponseStatus::Known(Status::CTAP2_OK) {
             log::log!(
-                level,
-                "{}: {}; status=0x{status:02x} duration_ms={}",
+                status.level(),
+                "{}: {}; status={} duration_ms={}",
                 self.name,
-                outcome(status),
+                status.outcome(),
+                status,
                 self.start.elapsed().as_millis(),
             );
         }
@@ -123,27 +120,150 @@ pub fn operation(command: Option<&Command>) -> Option<&'static str> {
     }
 }
 
-fn outcome(status: u8) -> &'static str {
+/// Decode once where OpenSK returns its serialized response. Unknown codes stay
+/// intact for diagnosis; an empty response must never be reported as success.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResponseStatus {
+    Known(Status),
+    Unknown(u8),
+    Missing,
+}
+
+impl ResponseStatus {
+    pub fn from_response(response: &[u8]) -> Self {
+        let Some(&byte) = response.first() else {
+            return Self::Missing;
+        };
+        // OpenSK exposes no byte-to-status conversion. Keep the conversion here,
+        // and use named statuses for all logging decisions and explanations.
+        const KNOWN: &[Status] = &[
+            Status::CTAP2_OK,
+            Status::CTAP1_ERR_INVALID_COMMAND,
+            Status::CTAP1_ERR_INVALID_PARAMETER,
+            Status::CTAP1_ERR_INVALID_LENGTH,
+            Status::CTAP1_ERR_INVALID_SEQ,
+            Status::CTAP1_ERR_TIMEOUT,
+            Status::CTAP1_ERR_CHANNEL_BUSY,
+            Status::CTAP1_ERR_LOCK_REQUIRED,
+            Status::CTAP1_ERR_INVALID_CHANNEL,
+            Status::CTAP2_ERR_CBOR_UNEXPECTED_TYPE,
+            Status::CTAP2_ERR_INVALID_CBOR,
+            Status::CTAP2_ERR_MISSING_PARAMETER,
+            Status::CTAP2_ERR_LIMIT_EXCEEDED,
+            Status::CTAP2_ERR_FP_DATABASE_FULL,
+            Status::CTAP2_ERR_LARGE_BLOB_STORAGE_FULL,
+            Status::CTAP2_ERR_CREDENTIAL_EXCLUDED,
+            Status::CTAP2_ERR_PROCESSING,
+            Status::CTAP2_ERR_INVALID_CREDENTIAL,
+            Status::CTAP2_ERR_USER_ACTION_PENDING,
+            Status::CTAP2_ERR_OPERATION_PENDING,
+            Status::CTAP2_ERR_NO_OPERATIONS,
+            Status::CTAP2_ERR_UNSUPPORTED_ALGORITHM,
+            Status::CTAP2_ERR_OPERATION_DENIED,
+            Status::CTAP2_ERR_KEY_STORE_FULL,
+            Status::CTAP2_ERR_NO_OPERATION_PENDING,
+            Status::CTAP2_ERR_UNSUPPORTED_OPTION,
+            Status::CTAP2_ERR_INVALID_OPTION,
+            Status::CTAP2_ERR_KEEPALIVE_CANCEL,
+            Status::CTAP2_ERR_NO_CREDENTIALS,
+            Status::CTAP2_ERR_USER_ACTION_TIMEOUT,
+            Status::CTAP2_ERR_NOT_ALLOWED,
+            Status::CTAP2_ERR_PIN_INVALID,
+            Status::CTAP2_ERR_PIN_BLOCKED,
+            Status::CTAP2_ERR_PIN_AUTH_INVALID,
+            Status::CTAP2_ERR_PIN_AUTH_BLOCKED,
+            Status::CTAP2_ERR_PIN_NOT_SET,
+            Status::CTAP2_ERR_PUAT_REQUIRED,
+            Status::CTAP2_ERR_PIN_POLICY_VIOLATION,
+            Status::CTAP2_ERR_PIN_TOKEN_EXPIRED,
+            Status::CTAP2_ERR_REQUEST_TOO_LARGE,
+            Status::CTAP2_ERR_ACTION_TIMEOUT,
+            Status::CTAP2_ERR_UP_REQUIRED,
+            Status::CTAP2_ERR_UV_BLOCKED,
+            Status::CTAP2_ERR_INTEGRITY_FAILURE,
+            Status::CTAP2_ERR_INVALID_SUBCOMMAND,
+            Status::CTAP2_ERR_UV_INVALID,
+            Status::CTAP2_ERR_UNAUTHORIZED_PERMISSION,
+            Status::CTAP1_ERR_OTHER,
+            Status::CTAP2_ERR_VENDOR_INTERNAL_ERROR,
+            Status::CTAP2_ERR_VENDOR_HARDWARE_FAILURE,
+        ];
+        KNOWN
+            .iter()
+            .copied()
+            .find(|status| *status as u8 == byte)
+            .map(Self::Known)
+            .unwrap_or(Self::Unknown(byte))
+    }
+
+    fn level(self) -> log::Level {
+        use Status::*;
+        match self {
+            Self::Known(
+                CTAP2_OK
+                | CTAP2_ERR_OPERATION_DENIED
+                | CTAP2_ERR_KEEPALIVE_CANCEL
+                | CTAP2_ERR_USER_ACTION_TIMEOUT,
+            ) => log::Level::Info,
+            Self::Known(CTAP2_ERR_VENDOR_INTERNAL_ERROR | CTAP2_ERR_VENDOR_HARDWARE_FAILURE)
+            | Self::Missing => log::Level::Error,
+            _ => log::Level::Warn,
+        }
+    }
+
+    fn outcome(self) -> &'static str {
+        match self {
+            Self::Known(status) => outcome(status),
+            Self::Unknown(_) => "unrecognized response status; use the status code for diagnosis",
+            Self::Missing => "internal failure: security key returned an empty response",
+        }
+    }
+}
+
+impl fmt::Display for ResponseStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Known(status) => write!(f, "0x{:02x}", *status as u8),
+            Self::Unknown(byte) => write!(f, "0x{byte:02x}"),
+            Self::Missing => f.write_str("missing"),
+        }
+    }
+}
+
+fn outcome(status: Status) -> &'static str {
+    use Status::*;
     match status {
-        0 => "completed",
-        0x19 => "a matching passkey already exists",
-        0x27 => "approval was declined or unavailable",
-        0x28 => "passkey storage is full; remove an unused passkey",
-        0x2d => "cancelled by the requesting application",
-        0x05 | 0x2f | 0x3a => "timed out waiting for completion",
-        0x2e => "no matching passkey found",
-        0x31 => "incorrect PIN",
-        0x32 => "PIN blocked; stop retrying and check recovery options",
-        0x33 => "PIN authorization is invalid or expired; enter the PIN again",
-        0x34 => "PIN attempts temporarily blocked; restart the service before retrying",
-        0x35 => "security key PIN has not been set up",
-        0x36 => "PIN verification is required",
-        0x37 => "PIN does not meet requirements",
-        0x38 => "PIN authorization expired; enter the PIN again",
-        0x01 | 0x26 | 0x2b | 0x30 | 0x3e => {
+        CTAP2_OK => "completed",
+        CTAP2_ERR_CREDENTIAL_EXCLUDED => "a matching passkey already exists",
+        CTAP2_ERR_OPERATION_DENIED => "approval was declined or unavailable",
+        CTAP2_ERR_KEY_STORE_FULL => "passkey storage is full; remove an unused passkey",
+        CTAP2_ERR_KEEPALIVE_CANCEL => "cancelled by the requesting application",
+        CTAP1_ERR_TIMEOUT | CTAP2_ERR_USER_ACTION_TIMEOUT | CTAP2_ERR_ACTION_TIMEOUT => {
+            "timed out waiting for completion"
+        }
+        CTAP2_ERR_NO_CREDENTIALS => "no matching passkey found",
+        CTAP2_ERR_PIN_INVALID => "incorrect PIN",
+        CTAP2_ERR_PIN_BLOCKED => "PIN blocked; stop retrying and check recovery options",
+        CTAP2_ERR_PIN_AUTH_INVALID => {
+            "PIN authorization is invalid or expired; enter the PIN again"
+        }
+        CTAP2_ERR_PIN_AUTH_BLOCKED => {
+            "PIN attempts temporarily blocked; restart the service before retrying"
+        }
+        CTAP2_ERR_PIN_NOT_SET => "security key PIN has not been set up",
+        CTAP2_ERR_PUAT_REQUIRED => "PIN verification is required",
+        CTAP2_ERR_PIN_POLICY_VIOLATION => "PIN does not meet requirements",
+        CTAP2_ERR_PIN_TOKEN_EXPIRED => "PIN authorization expired; enter the PIN again",
+        CTAP1_ERR_INVALID_COMMAND
+        | CTAP2_ERR_UNSUPPORTED_ALGORITHM
+        | CTAP2_ERR_UNSUPPORTED_OPTION
+        | CTAP2_ERR_NOT_ALLOWED
+        | CTAP2_ERR_INVALID_SUBCOMMAND => {
             "requested operation or option is not supported or allowed"
         }
-        0xf2 | 0xf3 => "internal or hardware failure; check preceding errors",
+        CTAP2_ERR_VENDOR_INTERNAL_ERROR | CTAP2_ERR_VENDOR_HARDWARE_FAILURE => {
+            "internal or hardware failure; check preceding errors"
+        }
         _ => "request failed; use the status code for diagnosis",
     }
 }
@@ -152,6 +272,27 @@ fn outcome(status: u8) -> &'static str {
 mod tests {
     use super::*;
     use log::Log;
+
+    #[test]
+    fn response_status_preserves_errors_and_rejects_missing_status() {
+        let wrong_pin = ResponseStatus::from_response(&[Status::CTAP2_ERR_PIN_INVALID as u8]);
+        assert_eq!(
+            wrong_pin,
+            ResponseStatus::Known(Status::CTAP2_ERR_PIN_INVALID)
+        );
+        assert_eq!(wrong_pin.outcome(), "incorrect PIN");
+        assert_eq!(wrong_pin.level(), log::Level::Warn);
+        let success = ResponseStatus::from_response(&[Status::CTAP2_OK as u8, 0xa0]);
+        assert_eq!(success, ResponseStatus::Known(Status::CTAP2_OK));
+        assert_eq!(success.level(), log::Level::Info);
+        let missing = ResponseStatus::from_response(&[]);
+        assert_eq!(missing, ResponseStatus::Missing);
+        assert_eq!(missing.level(), log::Level::Error);
+        assert_eq!(missing.to_string(), "missing");
+        let unknown = ResponseStatus::from_response(&[0x99]);
+        assert_eq!(unknown, ResponseStatus::Unknown(0x99));
+        assert_eq!(unknown.to_string(), "0x99");
+    }
 
     #[test]
     fn dependency_messages_are_excluded_from_the_journal() {
