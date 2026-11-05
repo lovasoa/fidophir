@@ -17,6 +17,10 @@ pub enum Error {
     Tpm(tss_esapi::Error),
     Invalid(&'static str),
     Desktop(glib::Error),
+    InvalidCredential {
+        path: std::path::PathBuf,
+        reason: String,
+    },
     State {
         path: std::path::PathBuf,
         reason: String,
@@ -47,7 +51,9 @@ impl std::fmt::Display for Error {
             Self::Tpm(e) => write!(f, "Trusted Platform Module error: {e}"),
             Self::Invalid(e) => f.write_str(e),
             Self::Desktop(_) => f.write_str("desktop authorization failed"),
-            Self::State { path, reason } => write!(f, "state {path:?}: {reason}"),
+            Self::InvalidCredential { path, reason } | Self::State { path, reason } => {
+                write!(f, "state {path:?}: {reason}")
+            }
         }
     }
 }

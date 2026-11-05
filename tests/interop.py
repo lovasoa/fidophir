@@ -319,16 +319,32 @@ def main():
                                  if f.read_bytes() == first.credential_id)
                 metadata = directory / "metadata.ini"
                 original_metadata = metadata.read_bytes()
+                remaining = ctap.get_info().remaining_disc_creds
+                metadata.chmod(0o644)
+                expect(0xF3, ctap.get_info)
+                assert directory.is_dir()
+                metadata.chmod(0o600)
                 metadata.write_text("[broken INI")
+                assert ctap.get_info().remaining_disc_creds == remaining + 1
+                parked = directory.with_name(directory.name + ".damaged-1")
+                assert parked.is_dir() and not directory.exists()
                 expect(CtapError.ERR.NO_CREDENTIALS, lambda: sign(ctap, new_pin, first))
                 sign(ctap, new_pin, second)
+                replacement = register(ctap, new_pin, b"parked-slot-reuse")
+                assert directory.is_dir() and parked.is_dir()
+                assert ctap.get_info().remaining_disc_creds == remaining
+                protocol, token = authorize(ctap, new_pin, ClientPin.PERMISSION.CREDENTIAL_MGMT)
+                manager = CredentialManagement(ctap, protocol, token)
+                assert manager.get_metadata()[CredentialManagement.RESULT.MAX_REMAINING_COUNT] == remaining
+                manager.delete_cred({"id": replacement.credential_id, "type": "public-key"})
                 pipe.close(); pipe = None
+                (parked / "metadata.ini").write_bytes(original_metadata)
+                parked.rename(directory)
                 pipe = Pipe(args.binary, state, tcti)
                 ctap = Ctap2(pipe)
-                sign(ctap, new_pin, second)
-                metadata.write_bytes(original_metadata)
+                assert ctap.get_info().remaining_disc_creds == remaining
                 sign(ctap, new_pin, first)
-                print("PASS: malformed metadata isolated across restart; repair takes effect immediately", flush=True)
+                print("PASS: damaged credential parked, slot reused, and credential restored", flush=True)
 
                 pipe.close(); pipe = None
                 removed = base / "removed-credential"
