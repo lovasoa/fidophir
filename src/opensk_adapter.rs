@@ -1,12 +1,41 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Compatibility with **unmodified**, pinned OpenSK. Read before updating it.
+//! Adapts **unmodified**, pinned OpenSK to TPM-backed PIN verification.
 //!
-//! OpenSK normally decrypts a stored PIN verifier, then compares it with the
-//! browser's candidate. We store no software verifier: the TPM checks the PIN.
-//! The transparent HKDF adapter observes the genuine ClientPIN v2 AES key. Our
-//! key-store callback decrypts the *same request*, asks the TPM, and returns the
-//! candidate on acceptance or a guaranteed mismatch on rejection. OpenSK's own
-//! comparison and wrong-PIN/lockout handling remain intact.
+//! A website asks the browser to use a passkey; the browser talks to OpenSK over
+//! CTAP, the protocol used by security keys. The PIN authorizes use of the
+//! authenticator locally: the website receives a signature, not the PIN.
+//! Fidophir presents OpenSK as a virtual security key and uses the TPM to
+//! protect its passkey keys and check PIN authorization.
+//!
+//! # The PIN verification trick
+//!
+//! OpenSK expects to decrypt a stored PIN verifier and compare it with the
+//! browser's candidate. The candidate is the first 16 bytes of SHA-256(PIN),
+//! encrypted by the browser for the current request. Fidophir instead supplies
+//! a configured-PIN marker and asks the TPM whether the candidate is correct;
+//! it stores no software PIN verifier on disk.
+//!
+//! To get the candidate, Fidophir observes a key OpenSK already computes. The
+//! browser and authenticator agree on a temporary secret, then use HKDF, a
+//! key-derivation function, to make an AES encryption key for the PIN protocol.
+//! Our HKDF wrapper performs the normal calculation and copies the AES key
+//! only while a PIN request is pending. Fidophir uses that key to decrypt its
+//! copy of the request; OpenSK independently decrypts the same candidate.
+//!
+//! When OpenSK asks to decrypt the stored verifier, Fidophir checks its
+//! candidate with the TPM and translates the answer into a comparison value:
+//!
+//! - TPM accepts: return the candidate, so OpenSK's comparison succeeds.
+//! - TPM rejects: flip one bit of the candidate, so the comparison must fail.
+//!
+//! Flipping a bit guarantees a mismatch even if an attacker chooses the
+//! candidate. OpenSK still performs its own comparison and retry handling;
+//! well-formed incorrect PIN attempts also reach the TPM's dictionary-attack
+//! protection.
+//! The TPM checks the PIN-derived hash as an authorization value, not the
+//! original PIN. Hashing a short PIN does not make it hard to guess by itself.
+//!
+//! # Compatibility and security contract
 //!
 //! Contract with the OpenSK crate's source (follow its version in Cargo.toml):
 //! - `ctap/pin_protocol.rs`: ClientPIN v2 derives its key with zero-salt HKDF
