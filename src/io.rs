@@ -59,7 +59,7 @@ impl Io {
 
     pub fn publish(&mut self, uid: u32) -> Result<()> {
         self.device = Some(UHIDDevice::create(CreateParams {
-            name: "Fidophir TPM".into(),
+            name: "Fidophir Trusted Platform Module".into(),
             phys: "fidophir-v2".into(),
             uniq: uid.to_string(),
             bus: Bus::VIRTUAL,

@@ -21,7 +21,8 @@ also requires PIN verification. Unknown INI keys are ignored.
 Binary fields use fixed filenames, with no encoding:
   credential-id.bin       Required, 32 bytes
   user-handle.bin         Required, up to 64 bytes (may be empty)
-  tpm-signing-blob.bin    Required, TPM-wrapped ES256 key; NOT a plaintext key
+  tpm-signing-blob.bin    Required, Trusted Platform Module-wrapped ES256 key;
+                          NOT a plaintext key
   cred-blob.bin           Optional opaque credential data
   large-blob-key.bin      Optional large-blob key
 
@@ -47,15 +48,17 @@ credential cache needs rebuilding. Unrecognized filenames are ignored.
 Shared state
 ------------
 authenticator/tpm-parent.bin protects ALL credentials and contains PIN-related
-TPM state. Never edit it. If missing with credentials present, or malformed,
-Fidophir refuses to provision a replacement. Restore a matching backup. Other
+Trusted Platform Module state. Never edit it. If missing with credentials present,
+or malformed, Fidophir refuses to provision a replacement. Restore a matching
+backup. Other
 files in authenticator/ are shared OpenSK settings or large-blob shards; their
 names describe their purpose. They are binary unless named *.flag (presence is
 meaningful). A shared-state error can affect all operations and is reported.
 
 Back up the complete state root with the service stopped, including this v2/
-directory. Backups work only with the same TPM and hierarchy state; clearing or
-losing the TPM can make them unusable. An old parent backup retains its old PIN.
+directory. Backups work only with the same Trusted Platform Module and hierarchy
+state; clearing or losing the Trusted Platform Module can make them unusable. An
+old parent backup retains its old PIN.
 There is no protection against privileged edits or rollback.
 
 Crash recovery

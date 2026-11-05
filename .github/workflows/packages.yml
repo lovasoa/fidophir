@@ -131,9 +131,39 @@ jobs:
           if-no-files-found: error
           path: dist/*.deb
 
+  hid:
+    name: Test FIDO CLI through Linux UHID
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+          submodules: true
+      - name: Install build and simulator dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential clang libclang-dev libglib2.0-dev libtss2-dev libtss2-tcti-swtpm0t64 pkg-config swtpm fido2-tools
+          rustup toolchain install 1.98.1 --profile minimal
+          rustup default 1.98.1
+      - name: Build test authenticator
+        run: |
+          make prepare
+          cargo build --locked --bin fidophir-integration --features integration-tests
+      - name: Permit the runner to use the test device
+        run: |
+          sudo modprobe uhid
+          test -c /dev/uhid
+          sudo chmod 0666 /dev/uhid
+          printf '%s\n' 'SUBSYSTEM=="hidraw", KERNELS=="0006:0000:0001.*", IMPORT{parent}="HID_*", ENV{HID_UNIQ}=="4294967295", MODE="0666", SYMLINK+="fidophir-$env{HID_UNIQ}"' | sudo tee /etc/udev/rules.d/99-fidophir-test.rules > /dev/null
+          sudo udevadm control --reload
+      - name: Exercise actual virtual device and FIDO tools
+        run: bash tests/hid_cli.sh "$PWD/target/debug/fidophir-integration"
+
   publish:
     name: Publish packages for this main commit
-    needs: [rpm, deb]
+    needs: [rpm, deb, hid]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10

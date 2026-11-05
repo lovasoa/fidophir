@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Test-only CBOR pipe transport for independent FIDO clients; never packaged.
-use fidophir::{env::LinuxEnv, io::Io};
+use fidophir::{
+    env::LinuxEnv,
+    io::{Io, dispatch_desktop},
+};
 use opensk::ctap::hid::{CtapHid, CtapHidCommand, HidPacketIterator, Message, MessageAssembler};
 use opensk::ctap::{CtapState, main_hid::MainHid};
 use std::io::{Read, Write};
@@ -48,12 +51,32 @@ fn main() {
             args[1].clone().into(),
             &args[2],
             io.clone(),
-            args[3] == "allow",
+            matches!(args[3].as_str(), "allow" | "uhid"),
         )
     }
     .expect("test environment");
     let mut state = CtapState::new(&mut env);
     let mut hid = MainHid::default();
+    if args[3] == "uhid" {
+        io.borrow_mut()
+            .publish(u32::MAX)
+            .expect("test UHID device");
+        eprintln!("test UHID ready");
+        loop {
+            dispatch_desktop();
+            state.can_sleep(&mut env);
+            let packet = io.borrow_mut().receive().expect("test UHID read");
+            if let Some(packet) = packet {
+                io.borrow_mut().enter(packet[..4].try_into().unwrap());
+                for frame in hid.process_hid_packet(&mut env, &packet, false, &mut state) {
+                    io.borrow_mut().send(&frame).expect("test UHID write");
+                }
+                io.borrow_mut().leave();
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+    }
     let init = exchange(
         &mut env,
         &mut state,

@@ -1,5 +1,5 @@
 [Unit]
-Description=TPM-backed FIDO authenticators
+Description=Fidophir security keys
 
 [Install]
 WantedBy=multi-user.target

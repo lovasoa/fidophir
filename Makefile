@@ -5,7 +5,7 @@ BINARY ?= $(TARGET_DIR)/release/fidophir
 DESTDIR ?=
 PREFIX ?= /usr
 
-.PHONY: prepare build test integration install
+.PHONY: prepare build test integration integration-hid install
 prepare:
 	sh tools/prepare-opensk.sh
 
@@ -13,7 +13,7 @@ build: prepare
 	$(CARGO) build --locked --release --bin fidophir --target-dir $(TARGET_DIR)
 
 test: prepare
-	python3 tests/packaging.py
+	bash tests/packaging.sh
 	$(CARGO) test --locked --lib --target-dir $(TARGET_DIR)
 	$(CARGO) test --locked --manifest-path build/opensk/Cargo.toml --no-default-features --features std --lib --target-dir $(TARGET_DIR)
 
@@ -21,6 +21,10 @@ integration: prepare
 	$(CARGO) build --locked --bin fidophir-integration --features integration-tests --target-dir $(TARGET_DIR)
 	python3 tests/interop.py --binary $(abspath $(TARGET_DIR))/debug/fidophir-integration --expiry
 	python3 tests/desktop.py --binary $(abspath $(TARGET_DIR))/debug/fidophir-integration
+
+integration-hid: prepare
+	$(CARGO) build --locked --bin fidophir-integration --features integration-tests --target-dir $(TARGET_DIR)
+	bash tests/hid_cli.sh $(abspath $(TARGET_DIR))/debug/fidophir-integration
 
 # Staging only: no account creation, policy reload, device access or service start.
 install:

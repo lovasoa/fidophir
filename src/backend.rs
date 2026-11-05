@@ -361,13 +361,19 @@ impl opensk::api::crypto::ec_signing::EcSecretKey for SigningKey {
         fatal("credential generation requires the platform key hook")
     }
     fn public_key(&self) -> VerifyingKey {
-        VerifyingKey(self.0.verifying_key().expect("validated TPM point"))
+        VerifyingKey(
+            self.0
+                .verifying_key()
+                .expect("validated Trusted Platform Module point"),
+        )
     }
     fn sign(&self, _: &[u8]) -> Signature {
         fatal("credential signing requires the platform key hook")
     }
     fn export(&self) -> Vec<u8> {
-        self.0.encode().expect("bounded TPM blob encoding")
+        self.0
+            .encode()
+            .expect("bounded Trusted Platform Module blob encoding")
     }
     fn import(bytes: &[u8]) -> Option<Self> {
         let blob = Blob::decode(bytes, Kind::Signing).ok()?;

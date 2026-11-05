@@ -2,7 +2,7 @@
 
 [![Packages CI](https://github.com/lovasoa/fidophir/actions/workflows/packages.yml/badge.svg?branch=main)](https://github.com/lovasoa/fidophir/actions/workflows/packages.yml)
 
-Fidophir exposes a Linux computer's TPM (a security chip found in most modern computers) as a virtual USB physical security key, allowing passkey authentication in web browsers. A passkey lets you sign in to a website without sending it a password. The TPM protects the private keys; wrapped key material and account information are stored on the computer. Firefox asks for a Fidophir PIN, and the desktop asks for approval when needed.
+Fidophir lets you use your Linux computer's built-in security hardware like a security key for passkeys. A passkey lets you sign in to a website without sending it a password. Fidophir presents a virtual security key to the browser; there is no separate USB key to plug in. Your computer's Trusted Platform Module (TPM) protects the private keys, while wrapped key material and account information are stored on the computer. Firefox asks for a Fidophir PIN, and the desktop asks for approval when needed.
 
 **Experimental:** Fidophir was built for me, Ophir. I intend to use it and fix bugs and security issues as I find them, but offer no guarantee whatsoever. Do not rely on it as your only way into an account. See [validation](VALIDATION.md).
 
@@ -60,12 +60,10 @@ The package starts Fidophir for each logged-in user. Each user has their own PIN
 
 ### Set your PIN
 
-1. In Firefox, open `about:webauthn` and select the **PIN** tab in the sidebar (separate from device information). Approve the desktop prompt if asked.
-2. Choose a PIN of at least four characters. It is separate from your desktop login password.
+1. Install the FIDO tools: `sudo dnf install fido2-tools` on Fedora or `sudo apt install fido2-tools` on Debian.
+2. Run `fido2-token -S /dev/fidophir-$(id -u)`. Choose a PIN of at least four characters and approve the desktop prompt if asked. The PIN is separate from your desktop login password.
 
 Set the PIN before enrolling with Firefox: Firefox on Linux may not offer to create one during website enrollment. Chrome may offer PIN setup during enrollment, but this flow has not yet been verified with Fidophir. Once set, the same Fidophir PIN works in both browsers.
-
-Firefox 159 on Fedora 44 has a known page-layout issue: the PIN panel can remain hidden after selection. For testing, removing the `hidden` attribute from `#set-change-pin-section` in the page Inspector reveals the form until the page is reloaded. This is a temporary browser workaround, not a verified first-use experience.
 
 ### Add a passkey
 
@@ -79,10 +77,24 @@ Keep another sign-in or recovery method for each account. Fidophir passkeys stay
 ### Troubleshooting
 
 - **No security key appears:** Make sure your desktop session is local, active and unlocked. Check the service status with `systemctl status "fidophir@$(id -u).service"`.
+- **Device path missing after an upgrade:** Run `sudo systemctl restart "fidophir@$(id -u).service"` to recreate it.
 - **The service fails to start:** Read its error messages with `journalctl -u "fidophir@$(id -u).service" -b`. Check that the computer has a working TPM and that `/dev/tpmrm0` and `/dev/uhid` exist.
 - **No approval prompt appears:** Unlock the screen and make sure your desktop can show authentication prompts, then retry.
-- **Enrollment fails or asks for a PIN:** Set the PIN in Firefox's `about:webauthn`, select the security key option, and retry. Browser and website compatibility is still being tested.
+- **Enrollment fails or asks for a PIN:** Set the PIN as described above, select the security key option, and retry. Browser and website compatibility is still being tested.
 - **Forgotten or blocked PIN:** Follow the reset steps below. Avoid repeated guesses, which can also lock the TPM temporarily.
+
+### Manage your PIN and passkeys
+
+Use the FIDO tools installed above. To change your PIN or list the websites with passkeys:
+
+```sh
+fido2-token -C /dev/fidophir-$(id -u)      # change PIN
+fido2-token -L -r /dev/fidophir-$(id -u)   # list websites
+```
+
+To see passkeys for a website, copy its name from the list and run `fido2-token -L -k WEBSITE /dev/fidophir-$(id -u)`. The output includes the ID of each passkey; to remove one, run `fido2-token -D -i ID /dev/fidophir-$(id -u)` with its ID. Enter your PIN and approve desktop prompts when asked.
+
+Deleting a passkey here does not remove it from the website; remove it there too. Keep another way to sign in.
 
 ### Saved credentials and maintenance
 
@@ -127,4 +139,17 @@ make test
 
 Builds use locked dependency versions. Cargo downloads missing dependencies; after fetching them, builds can also run with `CARGO_NET_OFFLINE=true`.
 
-`make integration` additionally needs `swtpm`, `tpm2-tools`, `python3-fido2`, `python3-gobject` and `dbus-daemon`. It uses disposable simulators and a private D-Bus, not the host TPM or real accounts. Its test-only binary is not for deployment. See [validation](VALIDATION.md) for what the tests cover and what remains untested.
+`make integration` additionally needs `swtpm`, `tpm2-tools`, `python3-fido2`, `python3-gobject` and `dbus-daemon`. It uses disposable simulators and a private D-Bus, not the host TPM or real accounts. Its test-only binary is not for deployment. `make integration-hid` additionally exercises the FIDO command-line tools through UHID and hidraw; it needs `swtpm`, `fido2-tools` and access to `/dev/uhid` and the generated hidraw device. See [validation](VALIDATION.md) for what the tests cover and what remains untested.
+
+## Related projects
+
+FIDO key management tools:
+
+- [libfido2](https://github.com/Yubico/libfido2) provides the `fido2-token` command-line tool used above.
+- [Keyroost](https://github.com/framefilter/keyroost) and [Token2 Key Manager / fido2-manage](https://github.com/token2/fido2-manage) provide graphical and command-line tools for managing FIDO keys. Their compatibility with Fidophir's virtual device has not been tested.
+
+Other TPM-backed virtual authenticators:
+
+- [tpm-fido](https://github.com/psanford/tpm-fido) is a Go/Linux U2F authenticator that emulates a security key and uses TPM-backed keys. Fidophir uses OpenSK to provide FIDO2 passkeys.
+- [TuSK](https://github.com/irtimmer/TuSK) also combines OpenSK, UHID and TPM-backed signing. TuSK documents software PIN protection and a `pinentry` popup; Fidophir uses TPM-backed PIN authorization and desktop approval through polkit.
+- [tpm-fido2-thinkpad-linux](https://github.com/mc256/tpm-fido2-thinkpad-linux) provides FIDO2 with TPM-backed keys and fingerprint verification through fprintd, plus a system tray toggle. Fidophir uses a PIN and desktop approval rather than requiring a fingerprint reader.

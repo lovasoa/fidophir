@@ -1,5 +1,5 @@
 [Unit]
-Description=TPM-backed FIDO passkey authenticator for user %i
+Description=Fidophir security key for user %i
 After=systemd-udev-trigger.service systemd-logind.service polkit.service dbus.service
 Wants=systemd-logind.service polkit.service
 PartOf=user@%i.service fidophir.target

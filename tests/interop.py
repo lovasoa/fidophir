@@ -254,6 +254,14 @@ def main():
                 assert len(credentials) == 2
                 print("PASS: standard credential-management enumeration",flush=True)
 
+                disposable = register(ctap, new_pin, b"delete-me")
+                protocol, token = authorize(ctap, new_pin, ClientPin.PERMISSION.CREDENTIAL_MGMT)
+                manager = CredentialManagement(ctap, protocol, token)
+                manager.delete_cred({"id": disposable.credential_id, "type": "public-key"})
+                expect(CtapError.ERR.NO_CREDENTIALS, lambda: sign(ctap, new_pin, disposable))
+                sign(ctap, new_pin, first)
+                print("PASS: credential-management deletion preserves other credentials", flush=True)
+
                 directory = next(f.parent for f in (state / "v2/credentials").glob("*/credential-id.bin")
                                  if f.read_bytes() == first.credential_id)
                 metadata = directory / "metadata.ini"

@@ -37,7 +37,7 @@ See the [state format and maintenance instructions](../src/state/README.txt). St
 
 ## Lifecycle tests
 
-`python3 tests/packaging.py` checks installation-hook policy decisions without touching host services. It also runs with `make test`.
+`bash tests/packaging.sh` checks installation-hook policy decisions without touching host services. It also runs with `make test`.
 
 `tests/systemd_lifecycle.py` builds and installs small fixture packages using the production unit dependencies, sysusers declaration, preset, installation hook and distro lifecycle helpers. Run it as root only in a clean, disposable container booted with systemd: `python3 tests/systemd_lifecycle.py deb` on Debian 13 with `debhelper` and `dpkg-dev`, or `python3 tests/systemd_lifecycle.py rpm` on Fedora 44 with `rpm-build` and `systemd-rpm-macros`. Both need Python 3. A dummy worker and relaxed restart limit replace FIDO/TPM operations and service sandboxing, so these tests establish lifecycle and directory behavior, not hardware or confinement guarantees. They cover existing logins, matching UID dependencies, logout, upgrade, target restart/removal and policy/mask denial.
 

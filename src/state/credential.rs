@@ -109,10 +109,14 @@ pub(super) fn read(store: &Store, path: &Path) -> Result<Vec<u8>> {
     };
     let blob_path = path.join("tpm-signing-blob.bin");
     let blob = required("tpm-signing-blob.bin")?;
-    let key = crate::tpm::Blob::decode(&blob, crate::tpm::Kind::Signing)
-        .map_err(|_| problem(&blob_path, "invalid TPM signing blob; restore from backup"))?;
+    let key = crate::tpm::Blob::decode(&blob, crate::tpm::Kind::Signing).map_err(|_| {
+        problem(
+            &blob_path,
+            "invalid Trusted Platform Module signing blob; restore from backup",
+        )
+    })?;
     key.verifying_key()
-        .map_err(|_| problem(&blob_path, "invalid TPM public point"))?;
+        .map_err(|_| problem(&blob_path, "invalid Trusted Platform Module public point"))?;
     let c = PublicKeyCredentialSource {
         key_type: PublicKeyCredentialType::PublicKey,
         credential_id: required("credential-id.bin")?,

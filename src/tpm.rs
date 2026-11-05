@@ -41,7 +41,7 @@ impl Blob {
 
     pub fn decode(bytes: &[u8], kind: Kind) -> Result<Self> {
         if bytes.len() > 1100 {
-            return Err(Error::Invalid("oversized TPM blob"));
+            return Err(Error::Invalid("oversized Trusted Platform Module blob"));
         }
         let fields = cbor_read(bytes)
             .ok()
@@ -61,11 +61,15 @@ impl Blob {
             || private.len() > 512
             || private.is_empty()
         {
-            return Err(Error::Invalid("invalid TPM blob bounds/version"));
+            return Err(Error::Invalid(
+                "invalid Trusted Platform Module blob bounds/version",
+            ));
         }
         let p = Public::unmarshall(&public)?;
         if p.marshall()? != public {
-            return Err(Error::Invalid("noncanonical TPM public blob"));
+            return Err(Error::Invalid(
+                "noncanonical Trusted Platform Module public blob",
+            ));
         }
         validate(&p, kind)?;
         Ok(Self {
@@ -82,7 +86,7 @@ impl Blob {
         let y = coordinate(unique.y().value())?;
         let point = p256::Sec1Point::from_affine_coordinates((&x).into(), (&y).into(), false);
         p256::ecdsa::VerifyingKey::from_sec1_bytes(point.as_bytes())
-            .map_err(|_| Error::Invalid("invalid TPM point"))
+            .map_err(|_| Error::Invalid("invalid Trusted Platform Module point"))
     }
 }
 
@@ -189,7 +193,9 @@ fn validate(public: &Public, kind: Kind) -> Result<()> {
         || public.name_hashing_algorithm() != HashingAlgorithm::Sha256
         || !public.auth_policy().value().is_empty()
     {
-        return Err(Error::Invalid("unexpected TPM object template"));
+        return Err(Error::Invalid(
+            "unexpected Trusted Platform Module object template",
+        ));
     }
     Ok(())
 }
@@ -425,13 +431,15 @@ impl Tpm {
             })
         })?;
         let Signature::EcDsa(s) = signature else {
-            return Err(Error::Invalid("unexpected TPM signature"));
+            return Err(Error::Invalid(
+                "unexpected Trusted Platform Module signature",
+            ));
         };
         p256::ecdsa::Signature::from_scalars(
             coordinate(s.signature_r().value())?,
             coordinate(s.signature_s().value())?,
         )
-        .map_err(|_| Error::Invalid("invalid TPM signature"))
+        .map_err(|_| Error::Invalid("invalid Trusted Platform Module signature"))
     }
 
     pub fn change_pin(

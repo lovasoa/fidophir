@@ -5,7 +5,7 @@
 Name:           fidophir
 Version:        %{fidophir_version}
 Release:        1%{?dist}
-Summary:        Experimental minimal TPM-backed FIDO authenticator
+Summary:        Use your computer's security hardware for passkeys
 License:        Apache-2.0 AND MIT AND BSD-2-Clause AND BSD-3-Clause AND Unicode-3.0 AND (Apache-2.0 WITH LLVM-exception)
 Source0:        %{name}-%{version}.tar.gz
 BuildRequires:  cargo >= 1.92
@@ -28,9 +28,11 @@ Requires:       tpm2-tss
 %{?systemd_requires}
 
 %description
-A per-user resident ES256 authenticator using OpenSK, TPM2-TSS and
-native login1/polkit desktop approval. Experimental; physical-device and
-browser acceptance checks are required before real-account use.
+Fidophir presents a virtual security key to your browser and uses your
+computer's built-in security hardware to protect passkeys. Each user has
+a separate authenticator and approves its use on the desktop.
+
+This software is experimental; keep another way to sign in.
 
 %prep
 %autosetup

@@ -43,7 +43,7 @@ impl std::fmt::Display for Error {
         // Error text never includes credential bytes, authorization or RP information.
         match self {
             Self::Io(e) => write!(f, "filesystem/transport error: {}", e.kind()),
-            Self::Tpm(e) => write!(f, "TPM error: {e}"),
+            Self::Tpm(e) => write!(f, "Trusted Platform Module error: {e}"),
             Self::Invalid(e) => f.write_str(e),
             Self::Desktop(_) => f.write_str("desktop authorization failed"),
             Self::State { path, reason } => write!(f, "state {path:?}: {reason}"),

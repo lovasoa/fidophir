@@ -270,7 +270,7 @@ impl Store {
                     crate::tpm::ParentRecord::decode(bytes).map_err(|_| {
                         problem(
                             &path,
-                            "invalid shared TPM parent; restore this file from a matching backup",
+                            "invalid shared Trusted Platform Module parent; restore this file from a matching backup",
                         )
                     })?;
                 }
@@ -281,7 +281,7 @@ impl Store {
                 {
                     return Err(problem(
                         &path,
-                        "shared TPM parent is missing while credentials exist; restore it from backup; refusing to provision a replacement",
+                        "shared Trusted Platform Module parent is missing while credentials exist; restore it from backup; refusing to provision a replacement",
                     ));
                 }
                 None => (),
