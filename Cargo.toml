@@ -10,6 +10,8 @@ rust-version = "1.92"
 
 [features]
 integration-tests = ["opensk/std"]
+# Disposable systemd CI packages only; never enable for release packages.
+systemd-tests = []
 
 [dependencies]
 log = "0.4.35"

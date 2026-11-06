@@ -1,13 +1,14 @@
 CARGO ?= cargo
 .DEFAULT_GOAL := build
 TARGET_DIR ?= target
+CARGO_FEATURES ?=
 BINARY ?= $(TARGET_DIR)/release/fidophir
 DESTDIR ?=
 PREFIX ?= /usr
 
 .PHONY: build test integration integration-hid install
 build:
-	$(CARGO) build --locked --release --bin fidophir --target-dir $(TARGET_DIR)
+	$(CARGO) build --locked --release --features "$(CARGO_FEATURES)" --bin fidophir --target-dir $(TARGET_DIR)
 
 test:
 	bash tests/packaging.sh

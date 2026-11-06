@@ -29,6 +29,10 @@ Each instance runs as the dedicated `fidophir` account with supplementary `tss` 
 
 See the [state format and maintenance instructions](../src/state/README.txt). Stopping or removing the package preserves state. Service accounts, root and the kernel remain trusted; this isolates desktop users, not compromised service processes. See the [physical acceptance checklist](../VALIDATION.md#remaining-physical-acceptance).
 
+## Service sandbox
+
+The daemon and its native libraries use the package architecture's syscall ABI (`SystemCallArchitectures=native`). `SystemCallFilter=~@debug` denies debugging and tracing syscalls, including `ptrace`, `perf_event_open` and `pidfd_getfd`. The daemon does not launch compatibility binaries or use these interfaces; TPM device I/O, UHID, local D-Bus and GLib event handling remain available. These controls require systemd built with seccomp support to enforce syscall restrictions.
+
 ## Crash recovery
 
 Unexpected adapter states and failures in OpenSK's infallible signing/key-generation interfaces stop the daemon after a sanitized fatal log. `Restart=on-failure` retries after three seconds; `StartLimitIntervalSec=0` prevents repeated failures from exhausting a restart quota. A persistent hardware, configuration or storage failure still requires repair. Intentional stops, logout and package removal do not trigger recovery.
@@ -39,7 +43,7 @@ A restart closes the UHID descriptor and briefly disconnects the virtual key, th
 
 `bash tests/packaging.sh` checks installation-hook policy decisions without touching host services. It also runs with `make test`.
 
-`tests/systemd_lifecycle.py` builds and installs small fixture packages using the production unit dependencies, sysusers declaration, preset, installation hook and distro lifecycle helpers. Run it as root only in a clean, disposable container booted with systemd: `python3 tests/systemd_lifecycle.py deb` on Debian 13 with `debhelper` and `dpkg-dev`, or `python3 tests/systemd_lifecycle.py rpm` on Fedora 44 with `rpm-build` and `systemd-rpm-macros`. Both need Python 3. A dummy worker replaces FIDO/TPM operations and service sandboxing, so these tests establish lifecycle and directory behavior, not hardware or confinement guarantees. They cover existing logins, matching UID dependencies, logout, upgrade, target restart/removal and policy/mask denial.
+`tests/systemd_lifecycle.py` installs a package built through the normal distro recipe and runs its real daemon under the unchanged systemd sandbox. CI boots disposable Debian 13 and Fedora 44 containers with real user managers, logind, polkit and udev. A compile-time `systemd-tests` feature selects the system-bus TPM resource manager backed by swtpm; production builds remain fixed to `/dev/tpmrm0`. The test checks CTAP GetInfo through actual UHID/hidraw devices, user ownership, crash recovery, logout, package reinstall, target restart/removal and policy/mask denial. See [the test setup and limits](../tests/systemd/README.md).
 
 ## Release builds
 

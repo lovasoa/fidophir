@@ -155,7 +155,13 @@ fn fatal(message: impl std::fmt::Display) -> ! {
 
 impl Backend {
     pub fn new(root: PathBuf, io: SharedIo) -> Result<Self> {
-        Self::start(root, "device:/dev/tpmrm0".parse()?, io)
+        // The CI package uses a system-bus resource manager backed by swtpm.
+        // Keep production transport fixed: runtime environment cannot select it.
+        #[cfg(not(feature = "systemd-tests"))]
+        let config = "device:/dev/tpmrm0";
+        #[cfg(feature = "systemd-tests")]
+        let config = "tabrmd:bus_name=com.intel.tss2.Tabrmd,bus_type=system";
+        Self::start(root, config.parse()?, io)
     }
 
     #[cfg(any(test, feature = "integration-tests"))]
