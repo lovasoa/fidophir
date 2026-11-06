@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import pwd
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -38,7 +39,23 @@ def pid(unit):
 def ready(uid):
     unit = f'fidophir@{uid}.service'
     device = Path(f'/dev/fidophir-{uid}')
-    if not active(unit) or not device.exists():
+    if not active(unit):
+        return False
+    if not device.exists():
+        # Docker snapshots /dev at startup; create only the real kernel node.
+        # Ownership and the user-facing symlink must still come from real udev.
+        for entry in Path('/sys/class/hidraw').glob('hidraw*'):
+            try:
+                properties = (entry / 'device/uevent').read_text().splitlines()
+            except FileNotFoundError:
+                continue
+            if 'HID_PHYS=fidophir-v2' not in properties or f'HID_UNIQ={uid}' not in properties:
+                continue
+            node = Path('/dev') / entry.name
+            if not node.exists():
+                major, minor = map(int, (entry / 'dev').read_text().split(':'))
+                os.mknod(node, stat.S_IFCHR | 0o600, os.makedev(major, minor))
+            run('udevadm', 'trigger', '--action=add', '--settle', str(entry))
         return False
     # Inspect the daemon's real CTAP GetInfo through the packaged udev symlink.
     # This also verifies the intended user can open the device.
@@ -119,5 +136,14 @@ if __name__ == '__main__':
     try:
         main(sys.argv[1])
     except Exception:
+        for uid in (1000, 1001):
+            device = Path(f'/dev/fidophir-{uid}')
+            print(f'Device {device}: exists={device.exists()} symlink={device.is_symlink()}', flush=True)
+            if device.exists():
+                try:
+                    subprocess.run(['runuser', '-u', f'key{uid}', '--', 'fido2-token', '-I', str(device)],
+                                   timeout=5)
+                except subprocess.TimeoutExpired:
+                    print('GetInfo client timed out', flush=True)
         subprocess.run(['journalctl', '-b', '--no-pager', '-n', '200'])
         raise

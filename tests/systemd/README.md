@@ -2,7 +2,10 @@ The package workflow runs `bash tests/systemd_container.sh deb|rpm` on a
 fresh GitHub-hosted Ubuntu VM, after downloading exactly one test package to
 `systemd-packages/`. The helper builds a runtime image from the matching pinned
 package builder base and boots systemd as PID 1. It needs Docker, sudo, and the
-UHID kernel module. Privileged execution and writable sysfs/cgroups are confined
+UHID kernel module. Docker's private `/dev` does not receive new devtmpfs
+nodes, so the test creates the matching character node from its real sysfs
+major/minor and retriggers the actual installed udev rules. Privileged execution
+and writable sysfs/cgroups are confined
 to that disposable runner.
 
 The package is built through the regular Debian/RPM recipes with the
