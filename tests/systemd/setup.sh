@@ -12,18 +12,17 @@ ExecStart=/usr/bin/swtpm socket --tpm2 --tpmstate dir=/var/lib/fidophir-test-tpm
 UNIT
 # The test daemon uses the real resource manager over the system bus, so the
 # packaged service keeps its AF_UNIX restriction and private network intact.
-mkdir -p /etc/systemd/system/tpm2-abrmd.service.d
-cat > /etc/systemd/system/tpm2-abrmd.service.d/simulator.conf <<'UNIT'
+cat > /etc/systemd/system/fidophir-test-abrmd.service <<'UNIT'
 [Unit]
-ConditionPathExists=
-ConditionPathExistsGlob=
+Description=Disposable test TPM resource manager
 Requires=fidophir-test-tpm.service
-After=fidophir-test-tpm.service
+After=fidophir-test-tpm.service dbus.service
 [Service]
-ExecStart=
+Type=dbus
+BusName=com.intel.tss2.Tabrmd
+User=tss
+Group=tss
 ExecStart=/usr/sbin/tpm2-abrmd --tcti=swtpm:host=127.0.0.1,port=2321
-Restart=on-failure
-RestartSec=1
 UNIT
 systemctl daemon-reload
 systemctl start systemd-udevd.service dbus.service systemd-logind.service polkit.service
@@ -41,6 +40,6 @@ for attempt in range(100):
 else:
     raise SystemExit('TPM simulator did not open its socket')
 PYREADY
-systemctl start tpm2-abrmd.service
+systemctl start fidophir-test-abrmd.service
 # Package setup will reload the installed rules and trigger UHID itself.
 udevadm control --ping

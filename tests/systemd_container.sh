@@ -13,7 +13,7 @@ test -c /dev/uhid
 image="fidophir-systemd-$kind"
 container="fidophir-systemd-$kind"
 cleanup() {
-    docker exec "$container" journalctl --no-pager -b > "$repo/systemd-$kind.log" 2>&1 || true
+    docker exec "$container" journalctl --no-pager -b --no-hostname -t systemd -t fidophir -t tpm2-abrmd -t swtpm > "$repo/systemd-$kind.log" 2>&1 || true
     docker rm -f "$container" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
