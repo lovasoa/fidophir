@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<component type="generic">
+  <id>io.github.lovasoa.fidophir</id>
+  <pkgname>fidophir</pkgname>
+  <metadata_license>MIT</metadata_license>
+  <project_license>Apache-2.0</project_license>
+  <name>Fidophir</name>
+  <summary>Use your computer's security hardware for passkeys</summary>
+  <description>
+    <p>
+      Fidophir presents a virtual security key to your browser and uses your
+      computer's built-in security hardware to protect passkeys. Each user has
+      a separate authenticator and approves its use on the desktop.
+    </p>
+    <p>This software is experimental; keep another way to sign in.</p>
+  </description>
+  <icon type="stock">io.github.lovasoa.fidophir</icon>
+  <url type="homepage">https://github.com/lovasoa/fidophir</url>
+  <url type="bugtracker">https://github.com/lovasoa/fidophir/issues</url>
+  <developer id="io.github.lovasoa">
+    <name>Fidophir contributors</name>
+  </developer>
+</component>

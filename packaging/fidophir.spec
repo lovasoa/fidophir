@@ -81,6 +81,11 @@ fi
 %{_modulesloaddir}/fidophir.conf
 %{_udevrulesdir}/72-fidophir.rules
 %{_datadir}/polkit-1/actions/org.local.fidophir.policy
+%{_datadir}/metainfo/io.github.lovasoa.fidophir.metainfo.xml
+%{_datadir}/icons/hicolor/scalable/apps/io.github.lovasoa.fidophir.svg
+%{_datadir}/icons/hicolor/64x64/apps/io.github.lovasoa.fidophir.png
+%{_datadir}/icons/hicolor/128x128/apps/io.github.lovasoa.fidophir.png
+%{_datadir}/icons/hicolor/256x256/apps/io.github.lovasoa.fidophir.png
 %{_docdir}/fidophir/
 %license %{_licensedir}/fidophir/
 
