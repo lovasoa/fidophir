@@ -4,8 +4,8 @@ set -euo pipefail
 kind=${1:?usage: systemd_container.sh deb|rpm}
 repo=$(cd "$(dirname "$0")/.." && pwd)
 case "$kind" in
-    deb) base=$(awk '$1 == "FROM" {print $2}' "$repo/packaging/images/rust/Dockerfile") ;;
-    rpm) base=$(awk '$1 == "FROM" {print $2}' "$repo/packaging/images/fedora/Dockerfile") ;;
+    deb) base=$(awk '$1 == "FROM" {print $2}' "$repo/packaging/images/deb/Dockerfile") ;;
+    rpm) base=$(awk '$1 == "FROM" {print $2}' "$repo/packaging/images/rpm/Dockerfile") ;;
     *) exit 2 ;;
 esac
 sudo modprobe uhid

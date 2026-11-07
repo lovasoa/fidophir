@@ -6,10 +6,10 @@ invoke=$1
 modprobe uhid || { [ -e /dev/uhid ] || echo 'fidophir: could not load UHID; check kernel support and /dev/uhid' >&2; }
 udevadm control --reload-rules || echo 'fidophir: could not reload device rules' >&2
 udevadm trigger --settle --action=change --subsystem-match=misc --sysname-match=uhid || echo 'fidophir: could not refresh UHID device permissions' >&2
-# Respect a masked/stopped target and Debian's policy-rc.d decision.
+# Respect a masked/stopped target and the policy-rc.d decision.
 systemctl --quiet is-active fidophir.target || exit 0
 # deb-systemd-invoke refuses dependency-driven template instances, so
-# consult Debian's standard policy interface before this activation step.
+# consult the standard policy interface before this activation step.
 if [ "$invoke" = deb-systemd-invoke ] && [ -x /usr/sbin/policy-rc.d ]; then
     status=0
     /usr/sbin/policy-rc.d fidophir.target start || status=$?

@@ -1,10 +1,10 @@
-# Local Fedora 44 package built from source with locked Cargo dependencies.
-# This is not a claim of Fedora distribution package-policy approval.
+# RPM package built from source with locked Cargo dependencies.
+# This is not a claim of distribution package-policy approval.
 %global debug_package %{nil}
 %{!?fidophir_version:%global fidophir_version 0.1.1}
 Name:           fidophir
 Version:        %{fidophir_version}
-Release:        1%{?dist}
+Release:        1
 Summary:        Use your computer's security hardware for passkeys
 License:        Apache-2.0 AND MIT AND BSD-2-Clause AND BSD-3-Clause AND Unicode-3.0 AND (Apache-2.0 WITH LLVM-exception)
 Source0:        %{name}-%{version}.tar.gz

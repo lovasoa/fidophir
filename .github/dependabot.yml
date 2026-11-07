@@ -10,10 +10,7 @@ updates:
         update-types: [minor, patch]
   - package-ecosystem: docker
     directories:
-      - /packaging/images/rust
-      - /packaging/images/fedora
+      - /packaging/images/deb
+      - /packaging/images/rpm
     schedule:
       interval: daily
-    ignore:
-      - dependency-name: fedora
-        update-types: [version-update:semver-major]

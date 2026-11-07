@@ -18,8 +18,8 @@ jobs:
     name: Read pinned build images
     runs-on: ubuntu-latest
     outputs:
-      fedora: ${{ steps.images.outputs.fedora }}
-      rust: ${{ steps.images.outputs.rust }}
+      rpm: ${{ steps.images.outputs.rpm }}
+      deb: ${{ steps.images.outputs.deb }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,18 +29,18 @@ jobs:
         shell: bash
         run: |
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'Expected an exact commit SHA'; exit 1; }
-          echo "fedora=$(awk '$1 == "FROM" {print $2}' packaging/images/fedora/Dockerfile)" >> "$GITHUB_OUTPUT"
-          echo "rust=$(awk '$1 == "FROM" {print $2}' packaging/images/rust/Dockerfile)" >> "$GITHUB_OUTPUT"
+          echo "rpm=$(awk '$1 == "FROM" {print $2}' packaging/images/rpm/Dockerfile)" >> "$GITHUB_OUTPUT"
+          echo "deb=$(awk '$1 == "FROM" {print $2}' packaging/images/deb/Dockerfile)" >> "$GITHUB_OUTPUT"
   rpm:
-    name: Test and build Fedora 44 RPM
+    name: Test and build RPM
     runs-on: ubuntu-latest
     needs: images
-    container: ${{ needs.images.outputs.fedora }}
+    container: ${{ needs.images.outputs.rpm }}
     timeout-minutes: 45
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Install Fedora build and simulator dependencies
+      - name: Install RPM build and simulator dependencies
         run: >-
           dnf install -y git rust cargo rustfmt clippy gcc make clang-devel
           pkgconf-pkg-config glib2-devel tpm2-tss-devel systemd-rpm-macros
@@ -102,17 +102,17 @@ jobs:
           path: systemd-packages/*.rpm
 
   deb:
-    name: Build Debian 13 DEB
+    name: Build DEB
     needs: [images, rpm]
     runs-on: ubuntu-latest
-    container: ${{ needs.images.outputs.rust }}
+    container: ${{ needs.images.outputs.deb }}
     timeout-minutes: 45
     env:
       PACKAGE_VERSION: ${{ needs.rpm.outputs.version }}
       DEBFULLNAME: Ophir Lojkine
       DEBEMAIL: lovasoa@users.noreply.github.com
     steps:
-      - name: Install Debian native build dependencies
+      - name: Install DEB native build dependencies
         run: |
           apt-get update
           apt-get install -y --no-install-recommends debhelper dpkg-dev devscripts git libglib2.0-dev libtss2-dev libclang-dev python3
@@ -236,15 +236,15 @@ jobs:
           status=$(gh api "repos/${GH_REPO}/compare/${SOURCE_SHA}...main" --jq .status)
           [[ "$status" == ahead || "$status" == identical ]] || { echo 'Source is outside main history'; exit 1; }
           tag="build-${SOURCE_SHA}"
-          printf 'Experimental fidophir build for commit `%s`.\n\nRead the README for supported package targets and physical acceptance before enrollment.\n' "$SOURCE_SHA" > release-notes.md
+          printf 'Experimental fidophir build for commit `%s`.\n\nRead the README for installation requirements and physical acceptance before enrollment.\n' "$SOURCE_SHA" > release-notes.md
           if gh release view "$tag" > /dev/null 2>&1; then
             gh release edit "$tag" --title "fidophir $PACKAGE_VERSION" --notes-file release-notes.md
           else
             gh release create "$tag" --target "$SOURCE_SHA" --title "fidophir $PACKAGE_VERSION" --notes-file release-notes.md --latest=false
           fi
           gh release upload "$tag" \
-            "packages/fidophir.rpm#Fidophir $PACKAGE_VERSION (Fedora 44 RPM)" \
-            "packages/fidophir.deb#Fidophir $PACKAGE_VERSION (Debian 13 DEB)" \
+            "packages/fidophir.rpm#Fidophir $PACKAGE_VERSION (RPM)" \
+            "packages/fidophir.deb#Fidophir $PACKAGE_VERSION (DEB)" \
             "${source_rpm[0]}" packages/SHA256SUMS --clobber
           # A slower old build must not replace a newer main commit as Latest.
           if [ "$(gh api "repos/${GH_REPO}/commits/main" --jq .sha)" = "$SOURCE_SHA" ]; then
