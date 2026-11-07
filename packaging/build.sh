@@ -4,6 +4,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 root=$PWD
 format=${1:-}
+if [[ -z $format ]]; then
+  . /etc/os-release
+  case " $ID ${ID_LIKE:-} " in
+    *debian*|*ubuntu*) format=deb ;;
+    *fedora*|*rhel*|*suse*) format=rpm ;;
+  esac
+fi
 output=${2:-dist}
 shift "$(( $# < 2 ? $# : 2 ))"
 mkdir -p "$output"
@@ -11,6 +18,11 @@ output=$(cd "$output" && pwd)
 
 case "$format" in
   rpm)
+    # External toolchains (including rustup) are not represented in RPM's database.
+    # Explicit rpmbuild options take precedence over automatic selection.
+    if (( $# == 0 )) && ! rpm -qf "$(command -v rustc)" "$(command -v cargo)" >/dev/null 2>&1; then
+      set -- --without system_rust
+    fi
     version=${PACKAGE_VERSION:-$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')}
     mkdir -p "$root/dist"
     topdir=$(mktemp -d "$root/dist/rpmbuild.XXXXXXXX")
@@ -39,7 +51,7 @@ case "$format" in
     find .. -maxdepth 1 -type f -name "fidophir_${version#*:}_*.deb" -exec cp -t "$output" -- {} +
     ;;
   *)
-    echo "Usage: $0 {rpm|deb} [output-directory] [rpmbuild-options...]" >&2
+    echo "Usage: $0 [rpm|deb] [output-directory] [rpmbuild-options...]" >&2
     exit 2
     ;;
 esac

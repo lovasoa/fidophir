@@ -9,29 +9,24 @@ On Fedora, build and install an RPM from the checkout:
 ```sh
 sudo dnf install rpm-build dnf-plugins-core
 sudo dnf builddep packaging/fidophir.spec
-./packaging/build.sh rpm
+./packaging/build.sh
 sudo dnf install ./dist/fidophir-*."$(rpm --eval '%{_arch}')".rpm
 ```
 
 On Debian, install the build dependencies listed in `debian/control` plus `dpkg-dev`, then build and install:
 
 ```sh
-./packaging/build.sh deb
+./packaging/build.sh
 sudo apt install ./dist/fidophir_*.deb
 ```
 
-To use your existing rustup toolchain instead of installing distro Rust, replace the Fedora dependency and build commands with:
+The script detects the package format from your distribution and whether the active Rust/Cargo executables belong to RPM packages. With rustup, it automatically selects RPM's `--without system_rust` build conditional. RPM still checks native dependencies; Cargo enforces `rust-version` from `Cargo.toml`. CI's distro toolchain keeps the standard Rust package requirements.
 
-```sh
-sudo dnf builddep --without=system_rust packaging/fidophir.spec
-./packaging/build.sh rpm dist --without system_rust
-```
-
-This uses RPM's standard build conditional to omit only the Rust/Cargo package requirements. RPM still checks native build dependencies; Cargo enforces `rust-version` from `Cargo.toml`. CI uses the default, with distro Rust dependencies enabled.
+If you already have rustup and want to avoid installing distro Rust, use `sudo dnf builddep --without=system_rust packaging/fidophir.spec` for the dependency step.
 
 Packages are written to `dist/`. The RPM source archive contains tracked working-tree files, including local changes; untracked files are excluded.
 
-The script accepts an optional output directory as its second argument, followed by native `rpmbuild` options for RPM builds. CI sets `PACKAGE_VERSION` to its commit-derived release version; for DEB builds this updates `debian/changelog`. `CARGO_FEATURES` selects build features, and CI sets `DEB_IGNORE_BUILD_DEPS=1` when Rust is supplied outside dpkg. Package builds run the recipe's tests.
+You can specify `rpm` or `deb` explicitly, followed by an output directory (default `dist`). Further arguments are passed to `rpmbuild` and replace automatic toolchain selection; for example, `./packaging/build.sh rpm dist --with system_rust` requires distro Rust. CI sets `PACKAGE_VERSION` to its commit-derived release version; for DEB builds this updates `debian/changelog`. `CARGO_FEATURES` selects build features, and CI sets `DEB_IGNORE_BUILD_DEPS=1` when Rust is supplied outside dpkg. Package builds run the recipe's tests.
 
 To inspect the installation layout without installing a package, run `make install DESTDIR=/absolute/staging/path` after building.
 

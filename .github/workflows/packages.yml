@@ -77,7 +77,7 @@ jobs:
       - name: Build RPM from tracked sources
         shell: bash
         run: |
-          bash packaging/build.sh rpm
+          bash packaging/build.sh rpm dist --with system_rust
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: packages-rpm
@@ -87,7 +87,7 @@ jobs:
 
       - name: Build a simulator transport variant through the normal RPM recipe
         run: |
-          CARGO_FEATURES=systemd-tests RPM_BINARY_ONLY=1 bash packaging/build.sh rpm systemd-packages
+          CARGO_FEATURES=systemd-tests RPM_BINARY_ONLY=1 bash packaging/build.sh rpm systemd-packages --with system_rust
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: systemd-package-rpm
