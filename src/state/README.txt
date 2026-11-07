@@ -26,6 +26,11 @@ Binary fields use fixed filenames, with no encoding:
   cred-blob.bin           Optional opaque credential data
   large-blob-key.bin      Optional large-blob key
 
+non-discoverable/ holds up to 300 additional records named by their random
+credential IDs (64 lowercase hex digits). These are only usable when the website
+supplies the ID; they are not offered for account discovery. Delete a record only
+after removing that security key from the website. Keep the shared TPM parent.
+
 Administration
 --------------
 Stop fidophir@UID.service before editing, deleting, copying or backing up state.

@@ -155,7 +155,7 @@ def check_logging(binary, base, tcti):
             assert output.tell() == 0, "discovery should be quiet"
             pin = "private-pin-984237"
             ClientPin(ctap).set_pin(pin)
-            expect(CtapError.ERR.UNSUPPORTED_OPTION, lambda: ctap.make_credential(
+            expect(CtapError.ERR.PIN_AUTH_INVALID, lambda: ctap.make_credential(
                 os.urandom(32), {"id": "private-site.example", "name": "Synthetic test"},
                 {"id": b"private-user-handle-58921", "name": "test", "displayName": "Test account"},
                 [{"type": "public-key", "alg": -7}], options={"rk": False}))
@@ -330,14 +330,32 @@ def main():
                 assert all(h not in f.read_bytes() for f in (state / "v2").rglob("*") if f.is_file())
                 print("PASS: two TPM-backed credentials, self-attestation and independent signature verification", flush=True)
 
-                expect(CtapError.ERR.UNSUPPORTED_OPTION, lambda: ctap.make_credential(os.urandom(32),
-                    {"id":"example.test"},{"id":b"nonresident"},[{"type":"public-key","alg":-7}],options={"rk":False}))
+                digest = os.urandom(32)
+                protocol, token = authorize(ctap, pin, ClientPin.PERMISSION.MAKE_CREDENTIAL, "nonresident.test")
+                response = ctap.make_credential(digest, {"id":"nonresident.test"},
+                    {"id":b"nonresident"}, [{"type":"public-key","alg":-7}], options={"rk":False},
+                    pin_uv_param=protocol.authenticate(token,digest), pin_uv_protocol=2)
+                nonresident = response.auth_data.credential_data
+                assert len(nonresident.credential_id) == 32
+                sign(ctap,pin,nonresident,"nonresident.test")
+                assert len(list((state / "v2/non-discoverable").iterdir())) == 1
+                pipe.close(); pipe = Pipe(args.binary, state, tcti); ctap = Ctap2(pipe)
+                sign(ctap,pin,nonresident,"nonresident.test")
+                protocol, token = authorize(ctap,pin,ClientPin.PERMISSION.GET_ASSERTION,"nonresident.test")
+                digest = os.urandom(32)
+                expect(CtapError.ERR.NO_CREDENTIALS, lambda: ctap.get_assertion("nonresident.test",digest,
+                    pin_uv_param=protocol.authenticate(token,digest),pin_uv_protocol=2))
+                protocol, token = authorize(ctap,pin,ClientPin.PERMISSION.GET_ASSERTION,"other.test")
+                digest = os.urandom(32)
+                expect(CtapError.ERR.NO_CREDENTIALS, lambda: ctap.get_assertion("other.test",digest,
+                    [{"id":nonresident.credential_id,"type":"public-key"}],
+                    pin_uv_param=protocol.authenticate(token,digest),pin_uv_protocol=2))
                 digest = os.urandom(32)
                 protocol, token = authorize(ctap,pin,ClientPin.PERMISSION.MAKE_CREDENTIAL,"example.test")
                 expect(CtapError.ERR.PIN_AUTH_INVALID, lambda: ctap.make_credential(digest,
                     {"id":"other.test"},{"id":b"wrong-rp"},[{"type":"public-key","alg":-7}],options={"rk":True},
                     pin_uv_param=protocol.authenticate(token,digest),pin_uv_protocol=2))
-                print("PASS: resident-only profile and token RP binding", flush=True)
+                print("PASS: non-discoverable registration, restart, RP binding and token RP binding", flush=True)
 
                 if args.expiry:
                     protocol, token = authorize(ctap,pin,ClientPin.PERMISSION.GET_ASSERTION,"example.test")

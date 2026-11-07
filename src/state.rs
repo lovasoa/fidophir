@@ -101,6 +101,15 @@ fn number(name: &str) -> Option<usize> {
         .then(|| name.parse().ok())
         .flatten()
 }
+fn hex_id(id: &[u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut name = String::with_capacity(64);
+    for byte in id {
+        name.push(HEX[(byte >> 4) as usize] as char);
+        name.push(HEX[(byte & 15) as usize] as char);
+    }
+    name
+}
 fn record_name(key: usize) -> Result<String> {
     if key > 4095 && key != PARENT {
         return Err(Error::Invalid("invalid storage key"));
@@ -134,6 +143,7 @@ impl Store {
         for path in [
             store.path.clone(),
             store.path.join("credentials"),
+            store.path.join("non-discoverable"),
             store.path.join("authenticator"),
         ] {
             match DirBuilder::new().mode(0o700).create(&path) {
@@ -333,6 +343,14 @@ impl Store {
         Ok(None)
     }
     fn has_credential_state(&self) -> Result<bool> {
+        let non_discoverable = self.path.join("non-discoverable");
+        self.check_dir(&non_discoverable)?;
+        if io_at(&non_discoverable, fs::read_dir(&non_discoverable))?
+            .next()
+            .is_some()
+        {
+            return Ok(true);
+        }
         let path = self.path.join("credentials");
         self.check_dir(&path)?;
         for entry in io_at(&path, fs::read_dir(&path))? {
@@ -346,6 +364,27 @@ impl Store {
             }
         }
         Ok(false)
+    }
+    pub fn write_non_discoverable(&self, id: &[u8; 32], bytes: &[u8]) -> Result<()> {
+        let dir = self.path.join("non-discoverable");
+        self.check_dir(&dir)?;
+        // Bound records independently of the discoverable credential slots.
+        if io_at(&dir, fs::read_dir(&dir))?.count() >= 300 {
+            return Err(problem(
+                &dir,
+                "non-discoverable credential limit (300) reached",
+            ));
+        }
+        let path = dir.join(hex_id(id));
+        if present(&path)? {
+            return Err(problem(&path, "credential ID collision"));
+        }
+        self.write_file(&path, bytes)
+    }
+    pub fn read_non_discoverable(&self, id: &[u8; 32]) -> Result<Option<Vec<u8>>> {
+        let dir = self.path.join("non-discoverable");
+        self.check_dir(&dir)?;
+        self.read_file(&dir.join(hex_id(id)))
     }
 
     fn park_credential(&self, path: &Path, key: usize) -> Result<PathBuf> {

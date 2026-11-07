@@ -11,7 +11,7 @@ Fidophir is an experimental Linux host for the [OpenSK](https://github.com/googl
 - [`src/opensk_adapter.rs`](src/opensk_adapter.rs) documents and enforces the compatibility contract with the unmodified OpenSK release from crates.io. Exact versions are in `Cargo.toml`, with archive checksums and transitive versions in `Cargo.lock`.
 - [Packaging](packaging/README.md) provides the service, permissions and build recipes.
 
-The production profile supports discoverable ES256 passkeys only, with a limit of 300, a minimum PIN length of four Unicode code points, ClientPIN v2, and required user verification. It uses a zero signature counter, zero AAGUID and self-attestation. It does not support CTAP1, non-discoverable credentials, TPM key export or sync. Compatibility with particular browsers and websites remains to be tested.
+The production profile supports discoverable and non-discoverable ES256 credentials, each with a limit of 300, a minimum PIN length of four Unicode code points, ClientPIN v2, and required user verification. Non-discoverable credentials use random 32-byte IDs and local TPM-wrapped key records; they are not enumerated during account discovery. It uses a zero signature counter, zero AAGUID and self-attestation. It does not support CTAP1, TPM key export or sync. Compatibility with particular browsers and websites remains to be tested.
 
 ## Security boundaries
 
