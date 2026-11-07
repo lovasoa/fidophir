@@ -164,6 +164,20 @@ def check_logging(binary, base, tcti):
             nonresident = register(ctap, pin, b"private-user-handle-58921", "private-site.example", rk=False)
             (state / "v2/non-discoverable/00000/metadata.ini").write_text("[broken")
             expect(CtapError.ERR.NO_CREDENTIALS, lambda: sign(ctap, pin, nonresident, "private-site.example"))
+            # Browser registration may probe an excluded credential using the
+            # same token before creating a non-discoverable credential.
+            rp = "probe.example"
+            protocol, token = authorize(ctap, pin, ClientPin.PERMISSION.MAKE_CREDENTIAL | ClientPin.PERMISSION.GET_ASSERTION, rp)
+            digest = os.urandom(32)
+            expect(CtapError.ERR.NO_CREDENTIALS, lambda: ctap.get_assertion(
+                rp, digest, [{"id": b"missing", "type": "public-key"}],
+                options={"up": False}, pin_uv_param=protocol.authenticate(token, digest),
+                pin_uv_protocol=protocol.VERSION))
+            digest = os.urandom(32)
+            ctap.make_credential(digest, {"id": rp},
+                {"id": b"probe-user", "name": "test", "displayName": "Test"},
+                [{"type": "public-key", "alg": -7}], options={"rk": False},
+                pin_uv_param=protocol.authenticate(token, digest), pin_uv_protocol=protocol.VERSION)
             protocol, token = authorize(ctap, pin, ClientPin.PERMISSION.GET_ASSERTION, "private-site.example")
             digest = os.urandom(32)
             expect(CtapError.ERR.NO_CREDENTIALS, lambda: ctap.get_assertion(

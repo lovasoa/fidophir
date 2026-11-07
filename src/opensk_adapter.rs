@@ -148,6 +148,9 @@ impl Authenticator {
                 .as_ref()
                 .is_ok_and(|c| crate::logging::operation(Some(c)).is_none());
             let interaction = crate::logging::Interaction::begin(command.as_ref().ok());
+            let silent_lookup = command.as_ref().is_ok_and(|command| {
+                matches!(command, Command::AuthenticatorGetAssertion(parameters) if !parameters.options.up)
+            });
             let prepared = command.and_then(|command| prepare_command(env, &command, channel));
             let mut response = match &prepared {
                 Ok(_) => self.state.process_command(env, bytes, channel),
@@ -159,7 +162,7 @@ impl Authenticator {
             if env.command_was_cancelled() {
                 response = vec![Status::CTAP2_ERR_KEEPALIVE_CANCEL as u8];
             }
-            finish_command(env, prepared.ok(), &response);
+            finish_command(env, prepared.ok(), &response, silent_lookup);
             interaction.finish(
                 crate::logging::ResponseStatus::from_response(&response),
                 quiet,
@@ -244,7 +247,21 @@ fn prepare_command(
     }
 }
 
-fn finish_command(env: &mut LinuxEnv, prepared: Option<AuthorizationOnSuccess>, response: &[u8]) {
+fn finish_command(
+    env: &mut LinuxEnv,
+    prepared: Option<AuthorizationOnSuccess>,
+    response: &[u8],
+    silent_lookup: bool,
+) {
+    // Browsers probe excluded credentials silently before creating one using
+    // the same PIN token. A miss is an expected result, not a failed grant.
+    if silent_lookup
+        && prepared.is_some()
+        && response.first() == Some(&(Status::CTAP2_ERR_NO_CREDENTIALS as u8))
+    {
+        env.backend.expire_pin_authorization(boot_ms());
+        return;
+    }
     if response.first() != Some(&(Status::CTAP2_OK as u8)) {
         env.backend.clear();
         return;
