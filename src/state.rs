@@ -170,18 +170,19 @@ impl Store {
         }
         // Unpublished directories are created only by us. An interrupted exchange
         // leaves the previous complete credential here, so removal is safe.
-        for entry in io_at(&store.path, fs::read_dir(store.path.join("credentials")))? {
-            let entry = entry?;
-            let name = entry.file_name();
-            if name
-                .to_str()
-                .and_then(|s| s.strip_prefix('.'))
-                .and_then(|s| s.strip_suffix(".pending"))
-                .and_then(number)
-                .is_some_and(|n| n < CREDENTIALS.len())
-            {
-                store.check_dir(&entry.path())?;
-                io_at(&entry.path(), fs::remove_dir_all(entry.path()))?;
+        for directory in ["credentials", "non-discoverable"] {
+            for entry in io_at(&store.path, fs::read_dir(store.path.join(directory)))? {
+                let entry = entry?;
+                let name = entry.file_name();
+                if name
+                    .to_str()
+                    .and_then(|s| s.strip_prefix('.'))
+                    .and_then(|s| s.strip_suffix(".pending"))
+                    .is_some_and(|s| number(s).is_some_and(|n| n < CREDENTIALS.len()))
+                {
+                    store.check_dir(&entry.path())?;
+                    io_at(&entry.path(), fs::remove_dir_all(entry.path()))?;
+                }
             }
         }
         if store.read(20)?.is_some() {
@@ -268,19 +269,7 @@ impl Store {
     pub fn read(&self, key: usize) -> Result<Option<Vec<u8>>> {
         let path = self.key_path(key)?;
         if CREDENTIALS.contains(&key) {
-            if fs::symlink_metadata(&path).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
-            {
-                return Ok(None);
-            }
-            return match credential::read(self, &path) {
-                Ok(bytes) => Ok(Some(bytes)),
-                Err(error @ Error::InvalidCredential { .. }) => {
-                    let parked = self.park_credential(&path, key)?;
-                    warn!("parked damaged credential at {}: {error}", parked.display());
-                    Ok(None)
-                }
-                Err(error) => Err(error),
-            };
+            return self.read_credential(&path, |path| credential::read(self, path));
         }
         self.check_dir(&self.path.join("authenticator"))?;
         let bytes = self.read_file(&path)?;
@@ -332,12 +321,15 @@ impl Store {
         Ok(keys)
     }
     pub fn free_credential_key(&self) -> Result<Option<usize>> {
-        self.check_dir(&self.path.join("credentials"))?;
-        for key in CREDENTIALS {
-            match fs::symlink_metadata(self.key_path(key)?) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Some(key)),
-                Err(e) => return Err(e.into()),
-                Ok(_) => (), // A damaged credential still owns its slot.
+        Ok(self
+            .free_slot(&self.path.join("credentials"))?
+            .map(|slot| slot + CREDENTIALS.start))
+    }
+    fn free_slot(&self, directory: &Path) -> Result<Option<usize>> {
+        self.check_dir(directory)?;
+        for slot in 0..CREDENTIALS.len() {
+            if !present(&directory.join(format!("{slot:05}")))? {
+                return Ok(Some(slot));
             }
         }
         Ok(None)
@@ -365,34 +357,72 @@ impl Store {
         }
         Ok(false)
     }
-    pub fn write_non_discoverable(&self, id: &[u8; 32], bytes: &[u8]) -> Result<()> {
+    pub fn create_non_discoverable(
+        &self,
+        source: opensk::api::key_store::CredentialSource,
+    ) -> Result<Vec<u8>> {
+        use rand::{TryRng, rngs::SysRng};
         let dir = self.path.join("non-discoverable");
         self.check_dir(&dir)?;
-        // Bound records independently of the discoverable credential slots.
-        if io_at(&dir, fs::read_dir(&dir))?.count() >= 300 {
-            return Err(problem(
-                &dir,
-                "non-discoverable credential limit (300) reached",
-            ));
-        }
-        let path = dir.join(hex_id(id));
-        if present(&path)? {
-            return Err(problem(&path, "credential ID collision"));
-        }
-        self.write_file(&path, bytes)
+        let mut id = [0; 32];
+        SysRng
+            .try_fill_bytes(&mut id)
+            .map_err(|_| Error::Invalid("OS randomness unavailable"))?;
+        let slot = self
+            .free_slot(&dir)?
+            .ok_or_else(|| problem(&dir, "non-discoverable credential limit (300) reached"))?;
+        let path = dir.join(format!("{slot:05}"));
+        self.publish_credential(&path, false, |staging| {
+            credential::write_non_discoverable(self, staging, &id, source)
+        })?;
+        Ok(id.to_vec())
     }
-    pub fn read_non_discoverable(&self, id: &[u8; 32]) -> Result<Option<Vec<u8>>> {
+    pub fn read_non_discoverable(
+        &self,
+        id: &[u8; 32],
+        rp_hash: &[u8; 32],
+    ) -> Result<Option<opensk::api::key_store::CredentialSource>> {
         let dir = self.path.join("non-discoverable");
         self.check_dir(&dir)?;
-        self.read_file(&dir.join(hex_id(id)))
+        for slot in 0..CREDENTIALS.len() {
+            let path = dir.join(format!("{slot:05}"));
+            if let Some(Some(source)) = self.read_credential(&path, |path| {
+                credential::read_non_discoverable(self, path, id, rp_hash)
+            })? {
+                return Ok(Some(source));
+            }
+        }
+        Ok(None)
     }
 
-    fn park_credential(&self, path: &Path, key: usize) -> Result<PathBuf> {
+    fn read_credential<T>(
+        &self,
+        path: &Path,
+        read: impl FnOnce(&Path) -> Result<T>,
+    ) -> Result<Option<T>> {
+        if !present(path)? {
+            return Ok(None);
+        }
+        match read(path) {
+            Ok(value) => Ok(Some(value)),
+            Err(error @ Error::InvalidCredential { .. }) => {
+                let parked = self.park_credential(path)?;
+                warn!("parked damaged credential at {}: {error}", parked.display());
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn park_credential(&self, path: &Path) -> Result<PathBuf> {
         use std::os::unix::ffi::OsStrExt;
         let parent = path.parent().unwrap();
         let source = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
         for suffix in 1..=u32::MAX {
-            let parked = parent.join(format!("{:05}.damaged-{suffix}", key - CREDENTIALS.start));
+            let parked = parent.join(format!(
+                "{}.damaged-{suffix}",
+                path.file_name().unwrap().to_string_lossy()
+            ));
             let target = std::ffi::CString::new(parked.as_os_str().as_bytes()).unwrap();
             let result = unsafe {
                 nix::libc::renameat2(
@@ -420,18 +450,32 @@ impl Store {
             self.check_dir(&self.path.join("authenticator"))?;
             return self.write_file(&path, bytes);
         }
-        let parent = self.path.join("credentials");
-        self.check_dir(&parent)?;
-        let exists = fs::symlink_metadata(&path).is_ok();
+        let exists = present(&path)?;
         if exists {
             credential::read(self, &path)?;
         }
-        let staging = parent.join(format!(".{:05}.pending", key - CREDENTIALS.start));
+        self.publish_credential(&path, exists, |staging| {
+            credential::write(self, staging, bytes)?;
+            credential::read(self, staging)?;
+            Ok(())
+        })
+    }
+
+    fn publish_credential(
+        &self,
+        path: &Path,
+        exists: bool,
+        write: impl FnOnce(&Path) -> Result<()>,
+    ) -> Result<()> {
+        let parent = path.parent().unwrap();
+        self.check_dir(parent)?;
+        let staging = parent.join(format!(
+            ".{}.pending",
+            path.file_name().unwrap().to_string_lossy()
+        ));
         self.mkdir(&staging)?;
         let publish = (|| {
-            credential::write(self, &staging, bytes)?;
-            // Validate the complete new credential before publishing it.
-            credential::read(self, &staging)?;
+            write(&staging)?;
             sync_directory(&staging)?;
             if exists {
                 use std::os::unix::ffi::OsStrExt;

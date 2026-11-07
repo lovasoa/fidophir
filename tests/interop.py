@@ -93,12 +93,12 @@ def authorize(ctap, pin, permission, rp=None):
     return client.protocol, token
 
 
-def register(ctap, pin, user, rp="example.test"):
+def register(ctap, pin, user, rp="example.test", rk=True):
     digest = os.urandom(32)
     protocol, token = authorize(ctap, pin, ClientPin.PERMISSION.MAKE_CREDENTIAL, rp)
     response = ctap.make_credential(digest, {"id": rp, "name": "Synthetic test"},
         {"id": user, "name": "test", "displayName": "Test account"},
-        [{"type": "public-key", "alg": -7}], options={"rk": True},
+        [{"type": "public-key", "alg": -7}], options={"rk": rk},
         extensions={"hmac-secret": True, "credProtect": 3},
         pin_uv_param=protocol.authenticate(token, digest), pin_uv_protocol=protocol.VERSION)
     assert response.auth_data.is_user_present() and response.auth_data.is_user_verified()
@@ -161,6 +161,9 @@ def check_logging(binary, base, tcti):
                 [{"type": "public-key", "alg": -7}], options={"rk": False}))
             credential = register(ctap, pin, b"private-user-handle-58921", "private-site.example")
             sign(ctap, pin, credential, "private-site.example")
+            nonresident = register(ctap, pin, b"private-user-handle-58921", "private-site.example", rk=False)
+            (state / "v2/non-discoverable/00000/metadata.ini").write_text("[broken")
+            expect(CtapError.ERR.NO_CREDENTIALS, lambda: sign(ctap, pin, nonresident, "private-site.example"))
             protocol, token = authorize(ctap, pin, ClientPin.PERMISSION.GET_ASSERTION, "private-site.example")
             digest = os.urandom(32)
             expect(CtapError.ERR.NO_CREDENTIALS, lambda: ctap.get_assertion(
@@ -180,7 +183,7 @@ def check_logging(binary, base, tcti):
         assert phrase in log, (phrase, log)
     for secret in (pin, "private-user-handle-58921", "private-site.example", "private-wrong-pin-7139",
                    "Test account", "private-missing-credential-7219", credential.credential_id.hex(),
-                   token.hex(), digest.hex()):
+                   nonresident.credential_id.hex(), token.hex(), digest.hex()):
         assert secret not in log, "private request data appeared in logs"
     for line in log.splitlines():
         if "request options " in line:
@@ -350,6 +353,15 @@ def main():
                 expect(CtapError.ERR.NO_CREDENTIALS, lambda: ctap.get_assertion("other.test",digest,
                     [{"id":nonresident.credential_id,"type":"public-key"}],
                     pin_uv_param=protocol.authenticate(token,digest),pin_uv_protocol=2))
+                healthy = register(ctap, pin, b"healthy-nonresident", "nonresident.test", rk=False)
+                (state / "v2/non-discoverable/00000/tpm-signing-blob.bin").write_bytes(b"corrupt")
+                digest = os.urandom(32)
+                protocol, token = authorize(ctap,pin,ClientPin.PERMISSION.GET_ASSERTION,"nonresident.test")
+                assertion = ctap.get_assertion("nonresident.test",digest,
+                    [{"id":c.credential_id,"type":"public-key"} for c in (nonresident, healthy)],
+                    pin_uv_param=protocol.authenticate(token,digest),pin_uv_protocol=2)
+                healthy.public_key.verify(bytes(assertion.auth_data) + digest, assertion.signature)
+                assert (state / "v2/non-discoverable/00000.damaged-1").is_dir()
                 digest = os.urandom(32)
                 protocol, token = authorize(ctap,pin,ClientPin.PERMISSION.MAKE_CREDENTIAL,"example.test")
                 expect(CtapError.ERR.PIN_AUTH_INVALID, lambda: ctap.make_credential(digest,

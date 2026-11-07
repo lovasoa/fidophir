@@ -14,15 +14,11 @@ use opensk::{
         persist::{Persist, PersistCredentialIter, PersistIter, keys::CREDENTIALS},
     },
     ctap::{
-        cbor_read, cbor_write,
         crypto_wrapper::aes256_cbc_decrypt,
-        data_formats::CredentialProtectionPolicy,
         secret::Secret,
         status_code::{Ctap2StatusCode as Status, CtapResult},
     },
 };
-use rand::{TryRng, rngs::SysRng};
-use sk_cbor::Value;
 use std::{
     cell::{Cell, RefCell},
     path::PathBuf,
@@ -567,97 +563,23 @@ impl KeyStore for Backend {
         &mut self,
         credential: CredentialSource,
     ) -> std::result::Result<Vec<u8>, key_store::Error> {
-        // The TPM blob cannot fit OpenSK's fixed-size encrypted credential ID.
-        // A random ID instead names a separate, non-discoverable local record.
-        let mut id = [0; 32];
-        SysRng
-            .try_fill_bytes(&mut id)
-            .map_err(|_| key_store::Error)?;
-        let mut bytes = Vec::new();
-        let policy = credential
-            .cred_protect_policy
-            .map(Value::from)
-            .unwrap_or_else(Value::null_value);
-        let blob = credential
-            .cred_blob
-            .map(Value::from)
-            .unwrap_or_else(Value::null_value);
-        cbor_write(
-            Value::array(vec![
-                1u64.into(),
-                credential.wrapped_private_key,
-                credential.rp_id_hash.to_vec().into(),
-                policy,
-                blob,
-            ]),
-            &mut bytes,
-        )
-        .map_err(|_| key_store::Error)?;
         self.run(true, move |_, store| {
-            store.write_non_discoverable(&id, &bytes)
+            store.create_non_discoverable(credential)
         })
-        .map_err(|_| key_store::Error)?;
-        Ok(id.to_vec())
+        .map_err(|_| key_store::Error)
     }
     fn unwrap_credential(
         &mut self,
         bytes: &[u8],
         rp_id_hash: &[u8],
     ) -> std::result::Result<Option<CredentialSource>, key_store::Error> {
-        let Ok(id) = <&[u8; 32]>::try_from(bytes) else {
+        let (Ok(id), Ok(rp_hash)) = (bytes.try_into(), rp_id_hash.try_into()) else {
             return Ok(None);
         };
-        let id = *id;
-        let Some(encoded) = self
-            .run(false, move |_, store| store.read_non_discoverable(&id))
-            .map_err(|_| key_store::Error)?
-        else {
-            return Ok(None);
-        };
-        let fields = cbor_read(&encoded)
-            .ok()
-            .and_then(Value::extract_array)
-            .ok_or(key_store::Error)?;
-        let [version, wrapped_private_key, rp_hash, policy, blob]: [Value; 5] =
-            fields.try_into().map_err(|_| key_store::Error)?;
-        if version.extract_unsigned() != Some(1) {
-            return Err(key_store::Error);
-        }
-        let rp_hash = rp_hash.extract_byte_string().ok_or(key_store::Error)?;
-        if rp_hash.as_slice() != rp_id_hash {
-            return Ok(None);
-        }
-        let rp_id_hash: [u8; 32] = rp_hash.try_into().map_err(|_| key_store::Error)?;
-        let policy = if policy.clone().extract_null().is_some() {
-            None
-        } else {
-            Some(CredentialProtectionPolicy::try_from(policy).map_err(|_| key_store::Error)?)
-        };
-        let cred_blob = if blob.clone().extract_null().is_some() {
-            None
-        } else {
-            Some(blob.extract_byte_string().ok_or(key_store::Error)?)
-        };
-        let wrapper = wrapped_private_key
-            .clone()
-            .extract_array()
-            .ok_or(key_store::Error)?;
-        let [algorithm, key]: [Value; 2] = wrapper.try_into().map_err(|_| key_store::Error)?;
-        if algorithm != sk_cbor::cbor_int!(-7)
-            || Blob::decode(
-                &key.extract_byte_string().ok_or(key_store::Error)?,
-                Kind::Signing,
-            )
-            .is_err()
-        {
-            return Err(key_store::Error);
-        }
-        Ok(Some(CredentialSource {
-            wrapped_private_key,
-            rp_id_hash,
-            cred_protect_policy: policy,
-            cred_blob,
-        }))
+        self.run(false, move |_, store| {
+            store.read_non_discoverable(&id, &rp_hash)
+        })
+        .map_err(|_| key_store::Error)
     }
     fn cred_random(&mut self, uv: bool) -> std::result::Result<Secret<[u8; 32]>, key_store::Error> {
         let access = self.0.pin_access.borrow();

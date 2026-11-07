@@ -215,3 +215,71 @@ fn capacity_and_interrupted_publication() {
     assert!(store.write(100, &[0; MAX_VALUE + 1]).is_err());
     assert!(cbor_read(&store.read(1700).unwrap().unwrap()).is_ok());
 }
+
+#[test]
+fn non_discoverable_records_are_readable_bound_and_protect_the_parent() {
+    let root = Directory::new();
+    let store = Store::open(&root.0).unwrap();
+    store.write(PARENT, &parent()).unwrap();
+    let source = opensk::api::key_store::CredentialSource {
+        wrapped_private_key: sk_cbor::cbor_array![
+            -7,
+            fixture_blob(Kind::Signing).encode().unwrap()
+        ],
+        rp_id_hash: [42; 32],
+        cred_protect_policy: Some(
+            opensk::ctap::data_formats::CredentialProtectionPolicy::UserVerificationRequired,
+        ),
+        cred_blob: Some(vec![7; 32]),
+    };
+    let id: [u8; 32] = store
+        .create_non_discoverable(source)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let path = root.path("v2/non-discoverable").join("00000");
+    let text = fs::read_to_string(path.join("metadata.ini")).unwrap();
+    assert!(text.contains(&format!("rp_id_hash={}", hex_id(&[42; 32]))));
+    assert!(text.contains("cred_protect_policy=3"));
+    let loaded = store
+        .read_non_discoverable(&id, &[42; 32])
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.cred_blob, Some(vec![7; 32]));
+    assert!(
+        store
+            .read_non_discoverable(&id, &[43; 32])
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        store.free_credential_key().unwrap(),
+        Some(CREDENTIALS.start)
+    );
+    assert!(
+        store
+            .list()
+            .unwrap()
+            .iter()
+            .all(|k| !CREDENTIALS.contains(k))
+    );
+    drop(store);
+    let store = Store::open(&root.0).unwrap();
+    assert!(
+        store
+            .read_non_discoverable(&id, &[42; 32])
+            .unwrap()
+            .is_some()
+    );
+    fs::write(path.join("tpm-signing-blob.bin"), b"corrupt").unwrap();
+    assert!(
+        store
+            .read_non_discoverable(&id, &[42; 32])
+            .unwrap()
+            .is_none()
+    );
+    assert!(path.with_file_name("00000.damaged-1").is_dir());
+    fs::remove_file(root.path("v2/authenticator/tpm-parent.bin")).unwrap();
+    drop(store);
+    assert!(Store::open(&root.0).is_err());
+}
