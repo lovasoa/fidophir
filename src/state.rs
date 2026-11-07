@@ -491,12 +491,12 @@ impl Store {
                     )
                 };
                 if rc != 0 {
-                    return Err(problem(&path, std::io::Error::last_os_error().to_string()));
+                    return Err(problem(path, std::io::Error::last_os_error().to_string()));
                 }
             } else {
-                io_at(&path, fs::rename(&staging, &path))?;
+                io_at(path, fs::rename(&staging, path))?;
             }
-            sync_directory(&parent)
+            sync_directory(parent)
         })();
         // On failure, leave the old published directory intact. After an
         // exchange this removes only the old version, never the new one.
