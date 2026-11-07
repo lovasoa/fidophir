@@ -33,7 +33,7 @@ Fidophir is useful if you want a hardware-backed passkey on the computer you alr
 - Your TPM and Fidophir's local state are both needed. Keep another sign-in or recovery method for every account.
 - Changing the Fidophir PIN or deleting a local passkey does **not** revoke a copied older state file on the same TPM. To revoke access, remove the passkey from the website.
 - Fidophir trusts the computer's administrator, kernel, browser and desktop approval system. It does not protect against privileged malware or guarantee protection against physical attacks.
-- Too many wrong PIN attempts can permanently block the Fidophir PIN, requiring local state removal and re-enrollment. Attempts can also contribute to the TPM's shared lockout, affecting other software. Fidophir cannot clear TPM lockout.
+- Too many wrong PIN attempts can block the Fidophir PIN. An administrator can reset its software counter if the PIN is known; a forgotten PIN requires local state removal and re-enrollment. Attempts can also contribute to the TPM's shared lockout, affecting other software. Fidophir cannot clear TPM lockout.
 - The desktop approval request describes the operation and website, but its text is supplied by the client and is not proof of the browser's origin. Fingerprint availability depends on your desktop configuration.
 
 See [design](DESIGN.md) for the security boundaries and implementation.
@@ -84,7 +84,7 @@ Keep another sign-in or recovery method for each account. Fidophir passkeys stay
 - **The key briefly disappears:** Hardware signing failures or internal compatibility checks can restart the service. It retries automatically; retry the browser operation after it returns. Inspect the journal if this repeats.
 - **No approval prompt appears:** Unlock the screen and make sure your desktop can show authentication prompts, then retry.
 - **Enrollment fails or asks for a PIN:** Set the PIN as described above, select the security key option, and retry. Browser and website compatibility is still being tested.
-- **Forgotten or blocked PIN:** Follow the reset steps below. Avoid repeated guesses, which can also lock the TPM temporarily.
+- **Forgotten or blocked PIN:** See the reset and retry-limit instructions below. Avoid repeated guesses, which can also lock the TPM temporarily.
 
 ### Manage your PIN and passkeys
 
@@ -103,7 +103,7 @@ Deleting a passkey here does not remove it from the website; remove it there too
 
 State lives under `/var/lib/fidophir-users/UID/v2/`. Each credential has a numbered directory with readable `metadata.ini` and separate binary files. `README.txt` inside the store explains editing, deletion, permissions and backup; the [format reference](src/state/README.txt) is also in this repository. Stop the user's service before maintenance. An invalid credential is parked and reported in the journal without disabling healthy credentials; its numbered slot can be reused.
 
-### Reset a forgotten or blocked PIN
+### Reset a forgotten PIN
 
 Resetting deletes **all your Fidophir passkeys** on this computer. You will need another sign-in or recovery method for each website, then add new passkeys. Other users' Fidophir passkeys are unaffected.
 
@@ -121,6 +121,25 @@ Resetting deletes **all your Fidophir passkeys** on this computer. You will need
 
 If the TPM itself is locked, resetting Fidophir does not clear that lockout. Check the service journal as described above and wait for the TPM lockout to clear before trying again.
 The journal reports the TPM's configured recovery interval when available; this is not the exact time remaining. TPM resets or loss of power can delay recovery. A confirmed TPM lockout does not consume a Fidophir PIN attempt.
+
+### PIN retry limits and administration
+
+Fidophir and the TPM maintain separate retry counters:
+
+- **Fidophir's software counter** is per user. A correct PIN resets it; eight failed attempts block PIN verification until an administrator intervenes. Three consecutive wrong attempts also temporarily block verification until the service is restarted. Restarting does not reset the persistent count. Neither block deletes passkeys.
+- **The TPM's counter** is shared with other software and uses settings configured on the computer. Failed protected authorizations increment the counter; reaching the configured maximum temporarily blocks protected TPM authorizations, even with the correct PIN. A successful PIN does not necessarily reset this counter. The TPM normally decreases it by one after each configured recovery interval without a TPM reset; power loss or resets can delay recovery. An interval of zero requires special handling. The configured interval is not the exact time remaining, and a TPM lockout may affect other applications. Restarting Fidophir or clearing its software counter does not clear the TPM lockout.
+
+Use `sudo tpm2_getcap -T device:/dev/tpmrm0 properties-variable` to inspect `TPM2_PT_LOCKOUT_COUNTER`, `TPM2_PT_MAX_AUTH_FAIL`, and `TPM2_PT_LOCKOUT_INTERVAL` (seconds). The command requires `tpm2-tools` and suitable TPM access. Stop retrying while the TPM is locked and allow it to recover.
+
+If the PIN is known and Fidophir's software counter is blocked, an administrator can reset that counter without deleting the PIN or passkeys. This bypasses the software retry limit; it does not make an unknown PIN recoverable or bypass the TPM's protections. Run these commands in the affected user's desktop account:
+
+```sh
+sudo systemctl stop "fidophir@$(id -u).service" &&
+  sudo rm -f -- "/var/lib/fidophir-users/$(id -u)/v2/authenticator/pin-retries.bin" &&
+  sudo systemctl start "fidophir@$(id -u).service"
+```
+
+Do not remove `tpm-parent.bin`: it protects all the user's passkeys. If the PIN is forgotten, use the full reset above and re-enroll using another sign-in method.
 
 ## Build and test
 
