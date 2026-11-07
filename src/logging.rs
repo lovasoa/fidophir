@@ -2,7 +2,7 @@
 //! Journal stream logging. Only fixed operation names and sanitized errors belong here.
 use opensk::ctap::{
     command::Command,
-    data_formats::{ClientPinSubCommand, CredentialManagementSubCommand},
+    data_formats::{ClientPinSubCommand, CredentialManagementSubCommand, SignatureAlgorithm},
     status_code::Ctap2StatusCode as Status,
 };
 use std::{
@@ -60,6 +60,7 @@ fn write(level: log::Level, message: fmt::Arguments<'_>) {
 pub struct Interaction {
     name: &'static str,
     start: Instant,
+    context: Option<RequestContext>,
 }
 impl Interaction {
     pub fn begin(command: Option<&Command>) -> Self {
@@ -71,9 +72,15 @@ impl Interaction {
         Self {
             name: name.unwrap_or("Security key request"),
             start: Instant::now(),
+            context: request_context(command),
         }
     }
     pub(crate) fn finish(self, status: ResponseStatus, quiet: bool) {
+        if status != ResponseStatus::Known(Status::CTAP2_OK)
+            && let Some(context) = &self.context
+        {
+            log::warn!("{}: request options {context}", self.name);
+        }
         if !quiet || status != ResponseStatus::Known(Status::CTAP2_OK) {
             log::log!(
                 status.level(),
@@ -84,6 +91,116 @@ impl Interaction {
                 self.start.elapsed().as_millis(),
             );
         }
+    }
+}
+
+// Only reviewed booleans belong here; never retain raw CTAP request data.
+enum RequestContext {
+    MakeCredential(MakeCredentialContext),
+    GetAssertion(GetAssertionContext),
+}
+
+struct MakeCredentialContext {
+    rk: bool,
+    uv: bool,
+    // Presence only: the authentication parameter itself is secret.
+    pin_auth_present: bool,
+    pin_protocol_present: bool,
+    es256_offered: bool,
+    // Presence only: the list contains credential identifiers.
+    exclude_list_present: bool,
+    hmac_secret: bool,
+    cred_protect_present: bool,
+    // Presence only: the blob may contain arbitrary private data.
+    cred_blob_present: bool,
+    large_blob_key_present: bool,
+    min_pin_length: bool,
+    enterprise_attestation_present: bool,
+}
+
+struct GetAssertionContext {
+    up: bool,
+    uv: bool,
+    // Presence only: the authentication parameter itself is secret.
+    pin_auth_present: bool,
+    pin_protocol_present: bool,
+    // Presence only: the list contains credential identifiers.
+    allow_list_present: bool,
+    // Presence only: the extension contains encrypted salts.
+    hmac_secret_present: bool,
+    cred_blob: bool,
+    large_blob_key_present: bool,
+}
+
+impl fmt::Display for RequestContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MakeCredential(p) => write!(
+                f,
+                "rk={} uv={} pin_auth_present={} pin_protocol_present={} es256_offered={} exclude_list_present={} hmac_secret={} cred_protect_present={} cred_blob_present={} large_blob_key_present={} min_pin_length={} enterprise_attestation_present={}",
+                p.rk,
+                p.uv,
+                p.pin_auth_present,
+                p.pin_protocol_present,
+                p.es256_offered,
+                p.exclude_list_present,
+                p.hmac_secret,
+                p.cred_protect_present,
+                p.cred_blob_present,
+                p.large_blob_key_present,
+                p.min_pin_length,
+                p.enterprise_attestation_present
+            ),
+            Self::GetAssertion(p) => write!(
+                f,
+                "up={} uv={} pin_auth_present={} pin_protocol_present={} allow_list_present={} hmac_secret_present={} cred_blob={} large_blob_key_present={}",
+                p.up,
+                p.uv,
+                p.pin_auth_present,
+                p.pin_protocol_present,
+                p.allow_list_present,
+                p.hmac_secret_present,
+                p.cred_blob,
+                p.large_blob_key_present
+            ),
+        }
+    }
+}
+
+fn request_context(command: Option<&Command>) -> Option<RequestContext> {
+    match command? {
+        Command::AuthenticatorMakeCredential(p) => {
+            Some(RequestContext::MakeCredential(MakeCredentialContext {
+                rk: p.options.rk,
+                uv: p.options.uv,
+                pin_auth_present: p.pin_uv_auth_param.is_some(),
+                pin_protocol_present: p.pin_uv_auth_protocol.is_some(),
+                es256_offered: p
+                    .pub_key_cred_params
+                    .iter()
+                    .any(|param| param.alg == SignatureAlgorithm::Es256),
+                exclude_list_present: p.exclude_list.is_some(),
+                hmac_secret: p.extensions.hmac_secret,
+                cred_protect_present: p.extensions.cred_protect.is_some(),
+                cred_blob_present: p.extensions.cred_blob.is_some(),
+                large_blob_key_present: p.extensions.large_blob_key.is_some(),
+                min_pin_length: p.extensions.min_pin_length,
+                enterprise_attestation_present: p.enterprise_attestation.is_some(),
+            }))
+        }
+        Command::AuthenticatorGetAssertion(p) => {
+            Some(RequestContext::GetAssertion(GetAssertionContext {
+                up: p.options.up,
+                uv: p.options.uv,
+                pin_auth_present: p.pin_uv_auth_param.is_some(),
+                pin_protocol_present: p.pin_uv_auth_protocol.is_some(),
+                allow_list_present: p.allow_list.is_some(),
+                hmac_secret_present: p.extensions.hmac_secret.is_some(),
+                cred_blob: p.extensions.cred_blob,
+                large_blob_key_present: p.extensions.large_blob_key.is_some(),
+            }))
+        }
+        _ => None,
     }
 }
 impl Drop for Interaction {

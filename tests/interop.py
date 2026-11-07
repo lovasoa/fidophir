@@ -155,8 +155,18 @@ def check_logging(binary, base, tcti):
             assert output.tell() == 0, "discovery should be quiet"
             pin = "private-pin-984237"
             ClientPin(ctap).set_pin(pin)
+            expect(CtapError.ERR.UNSUPPORTED_OPTION, lambda: ctap.make_credential(
+                os.urandom(32), {"id": "private-site.example", "name": "Synthetic test"},
+                {"id": b"private-user-handle-58921", "name": "test", "displayName": "Test account"},
+                [{"type": "public-key", "alg": -7}], options={"rk": False}))
             credential = register(ctap, pin, b"private-user-handle-58921", "private-site.example")
             sign(ctap, pin, credential, "private-site.example")
+            protocol, token = authorize(ctap, pin, ClientPin.PERMISSION.GET_ASSERTION, "private-site.example")
+            digest = os.urandom(32)
+            expect(CtapError.ERR.NO_CREDENTIALS, lambda: ctap.get_assertion(
+                "private-site.example", digest,
+                [{"id": b"private-missing-credential-7219", "type": "public-key"}],
+                pin_uv_param=protocol.authenticate(token, digest), pin_uv_protocol=protocol.VERSION))
             expect(CtapError.ERR.PIN_INVALID, lambda: authorize(
                 ctap, "private-wrong-pin-7139", ClientPin.PERMISSION.GET_ASSERTION, "private-site.example"))
         finally:
@@ -164,10 +174,13 @@ def check_logging(binary, base, tcti):
         output.seek(0)
         log = output.read().decode()
     for phrase in ("Create passkey: completed", "Sign with passkey: completed",
+                   "request options rk=false uv=false pin_auth_present=false pin_protocol_present=false es256_offered=true",
+                   "request options up=true uv=false pin_auth_present=true pin_protocol_present=true allow_list_present=true",
                    "Set up security key PIN: completed", "incorrect PIN", "duration_ms=", "<4>", "<6>"):
         assert phrase in log, (phrase, log)
     for secret in (pin, "private-user-handle-58921", "private-site.example", "private-wrong-pin-7139",
-                   "Test account", credential.credential_id.hex()):
+                   "Test account", "private-missing-credential-7219", credential.credential_id.hex(),
+                   token.hex(), digest.hex()):
         assert secret not in log, "private request data appeared in logs"
     starts = re.findall(r"request=(\d+) .*: started", log)
     assert len(starts) == len(set(starts)), "request numbers were reused"
