@@ -120,6 +120,7 @@ Resetting deletes **all your Fidophir passkeys** on this computer. You will need
    ```
 
 If the TPM itself is locked, resetting Fidophir does not clear that lockout. Check the service journal as described above and wait for the TPM lockout to clear before trying again.
+The journal reports the TPM's configured recovery interval when available; this is not the exact time remaining. TPM resets or loss of power can delay recovery. A confirmed TPM lockout does not consume a Fidophir PIN attempt.
 
 ## Build and test
 

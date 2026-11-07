@@ -20,7 +20,7 @@ use opensk::{
     },
 };
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     path::PathBuf,
     rc::Rc,
     sync::mpsc::{self, SyncSender},
@@ -110,6 +110,7 @@ struct Inner {
     worker: Option<std::thread::JoinHandle<()>>,
     io: SharedIo,
     pin_access: RefCell<PinAccess>,
+    tpm_lockout: Cell<bool>,
 }
 impl Drop for Inner {
     fn drop(&mut self) {
@@ -204,6 +205,7 @@ impl Backend {
             worker: Some(worker),
             io,
             pin_access: RefCell::new(PinAccess::None),
+            tpm_lockout: Cell::new(false),
         })))
     }
 
@@ -444,6 +446,9 @@ impl Persist for Backend {
 }
 
 impl Backend {
+    pub fn take_tpm_lockout(&self) -> bool {
+        self.0.tpm_lockout.replace(false)
+    }
     fn is_set(&self) -> CtapResult<bool> {
         self.read_record(PARENT)?
             .map(|bytes| ParentRecord::decode(&bytes))
@@ -513,7 +518,28 @@ impl Backend {
             };
         let mut candidate = Secret::<[u8; 16]>::default();
         candidate.copy_from_slice(&decrypted);
-        if self.verify(&candidate)? {
+        let verified = match self.verify(&candidate) {
+            Err(Status::CTAP2_ERR_PIN_AUTH_BLOCKED) => {
+                // The TPM definitively rejected the command before checking the PIN.
+                // Restore only this durably charged attempt; uncertain failures stay charged.
+                self.write_record(
+                    opensk::api::persist::keys::PIN_RETRIES,
+                    vec![attempt.expected_failure_count - 1],
+                )?;
+                self.0.tpm_lockout.set(true);
+                match self.run(false, |tpm, _| tpm.lockout_interval()) {
+                    Ok(Some(seconds)) if seconds > 0 => log::warn!(
+                        "TPM is temporarily locked; the configured recovery interval is {seconds} seconds per counter decrement, not an exact remaining wait; TPM resets may delay recovery; do not retry until it recovers; restarting Fidophir does not clear TPM lockout"
+                    ),
+                    _ => log::warn!(
+                        "TPM is temporarily locked; recovery time is unavailable or requires special handling; do not retry until it recovers; restarting Fidophir does not clear TPM lockout"
+                    ),
+                }
+                return Err(Status::CTAP2_ERR_PIN_AUTH_BLOCKED);
+            }
+            result => result?,
+        };
+        if verified {
             Ok(TpmPinComparison::Accepted(candidate))
         } else {
             Ok(TpmPinComparison::Rejected(candidate))
@@ -664,6 +690,7 @@ mod tests {
             worker: None,
             io: crate::io::Io::shared(),
             pin_access: RefCell::new(PinAccess::None),
+            tpm_lockout: Cell::new(false),
         }))
     }
 

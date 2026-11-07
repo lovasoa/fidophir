@@ -66,7 +66,14 @@ impl Interaction {
     pub fn begin(command: Option<&Command>) -> Self {
         let name = operation(command);
         REQUEST.with(|request| request.set(Some(NEXT.fetch_add(1, Ordering::Relaxed))));
-        if let Some(name) = name {
+        if let Some(name) = name
+            && !matches!(
+                command,
+                Some(
+                    Command::AuthenticatorMakeCredential(_) | Command::AuthenticatorGetAssertion(_)
+                )
+            )
+        {
             log::info!("{name}: started");
         }
         Self {
@@ -79,7 +86,7 @@ impl Interaction {
         if status != ResponseStatus::Known(Status::CTAP2_OK)
             && let Some(context) = &self.context
         {
-            log::warn!("{}: request options {context}", self.name);
+            log::info!("{}: request options {context}", self.name);
         }
         if !quiet || status != ResponseStatus::Known(Status::CTAP2_OK) {
             log::log!(
@@ -386,7 +393,7 @@ fn outcome(status: Status) -> &'static str {
             "the request's PIN authorization is invalid or no longer available, for example after a failed request or service restart; cancel the browser's security key dialog, start the operation again and enter the Fidophir PIN when asked; if this repeats with the correct PIN, update the browser and check the service journal for earlier errors"
         }
         CTAP2_ERR_PIN_AUTH_BLOCKED => {
-            "PIN attempts are temporarily blocked after repeated failures; stop guessing; once you know the correct Fidophir PIN, run `sudo systemctl restart \"fidophir@$(id -u).service\"` and start the browser operation again; restarting does not clear the remaining attempt limit or a TPM lockout; if the PIN is forgotten, follow README 'Reset a forgotten or blocked PIN' (deletes all local Fidophir passkeys)"
+            "PIN attempts are temporarily blocked; check preceding messages for TPM lockout and its recovery interval; otherwise restart the Fidophir service after repeated incorrect PINs; restarting does not clear a TPM lockout or reset the remaining PIN attempts"
         }
         CTAP2_ERR_PIN_NOT_SET => {
             "no Fidophir PIN has been configured for this desktop account; install fido2-tools, run `fido2-token -S /dev/fidophir-$(id -u)`, choose a PIN of at least four characters and approve the desktop prompt; then retry enrollment and choose 'security key' in the browser"

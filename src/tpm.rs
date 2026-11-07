@@ -10,7 +10,7 @@ use sk_cbor::{Value, cbor_array};
 use tss_esapi::{
     Context,
     attributes::{ObjectAttributes, ObjectAttributesBuilder, SessionAttributesBuilder},
-    constants::{SessionType, StructureTag},
+    constants::{CapabilityType, PropertyTag, SessionType, StructureTag},
     handles::{KeyHandle, SessionHandle},
     interface_types::{
         algorithm::{HashingAlgorithm, PublicAlgorithm},
@@ -289,6 +289,21 @@ fn protected<T>(
 }
 
 impl Tpm {
+    pub fn lockout_interval(&mut self) -> Result<Option<u32>> {
+        let (data, _) = self.context.execute_without_session(|ctx| {
+            ctx.get_capability(
+                CapabilityType::TpmProperties,
+                PropertyTag::LockoutInterval.into(),
+                1,
+            )
+        })?;
+        Ok(match data {
+            CapabilityData::TpmProperties(properties) => properties
+                .find(PropertyTag::LockoutInterval)
+                .map(|property| property.value()),
+            _ => None,
+        })
+    }
     pub fn new(config: TctiNameConf) -> Result<Self> {
         let mut context = Context::new(config)?;
         // No secret input here. Owner/object auth is empty; startup never changes hierarchy auth.

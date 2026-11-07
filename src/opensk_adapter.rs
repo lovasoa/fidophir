@@ -142,6 +142,7 @@ impl Authenticator {
         let backend = env.backend.clone();
         scope::with_backend(&backend, || {
             env.set_approval_context(None, None);
+            env.backend.take_tpm_lockout();
             let command = Command::deserialize(bytes);
             let quiet = command
                 .as_ref()
@@ -152,6 +153,9 @@ impl Authenticator {
                 Ok(_) => self.state.process_command(env, bytes, channel),
                 Err(status) => vec![*status as u8],
             };
+            if env.backend.take_tpm_lockout() {
+                response = vec![Status::CTAP2_ERR_PIN_AUTH_BLOCKED as u8];
+            }
             if env.command_was_cancelled() {
                 response = vec![Status::CTAP2_ERR_KEEPALIVE_CANCEL as u8];
             }

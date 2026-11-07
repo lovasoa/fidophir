@@ -182,11 +182,47 @@ def check_logging(binary, base, tcti):
                    "Test account", "private-missing-credential-7219", credential.credential_id.hex(),
                    token.hex(), digest.hex()):
         assert secret not in log, "private request data appeared in logs"
+    for line in log.splitlines():
+        if "request options " in line:
+            assert line.startswith("<6>"), line
+        assert "Create passkey: started" not in line and "Sign with passkey: started" not in line, line
     starts = re.findall(r"request=(\d+) .*: started", log)
     assert len(starts) == len(set(starts)), "request numbers were reused"
     for request in starts:
         assert re.search(rf"request={request} .*status=0x[0-9a-f]{{2}} duration_ms=\d+", log), log
     print("PASS: readable interaction results, priorities, correlation and private data exclusion", flush=True)
+
+
+def check_tpm_lockout(binary, base, tcti):
+    state = base / "lockout-records"
+    state.mkdir(mode=0o700)
+    subprocess.run(["tpm2_dictionarylockout", "-T", tcti, "--setup-parameters",
+                    "--max-tries", "1", "--recovery-time", "1000",
+                    "--lockout-recovery-time", "1000"], check=True)
+    with tempfile.TemporaryFile() as output:
+        pipe = Pipe(binary, state, tcti, stderr_file=output)
+        try:
+            ctap = Ctap2(pipe)
+            ClientPin(ctap).set_pin("1234")
+            expect(CtapError.ERR.PIN_INVALID, lambda: authorize(ctap, "wrong", ClientPin.PERMISSION.GET_ASSERTION, "example.test"))
+            assert ClientPin(ctap).get_pin_retries()[0] == 7
+            for _ in range(3):
+                expect(CtapError.ERR.PIN_AUTH_BLOCKED, lambda: authorize(ctap, "1234", ClientPin.PERMISSION.GET_ASSERTION, "example.test"))
+                assert ClientPin(ctap).get_pin_retries()[0] == 7
+            pipe.close()
+            pipe = Pipe(binary, state, tcti, stderr_file=output)
+            ctap = Ctap2(pipe)
+            assert ClientPin(ctap).get_pin_retries()[0] == 7
+            subprocess.run(["tpm2_dictionarylockout", "-T", tcti, "--clear-lockout"], check=True)
+            authorize(ctap, "1234", ClientPin.PERMISSION.GET_ASSERTION, "example.test")
+            assert ClientPin(ctap).get_pin_retries()[0] == 8
+        finally:
+            pipe.close()
+        output.seek(0)
+        log = output.read().decode()
+    assert "configured recovery interval is 1000 seconds per counter decrement" in log, log
+    assert "not an exact remaining wait" in log, log
+    print("PASS: TPM lockout is reported without consuming PIN retries and recovers", flush=True)
 
 
 def main():
@@ -212,6 +248,7 @@ def main():
             try:
                 time.sleep(0.3)
                 assert sim.poll() is None, "simulator did not start"
+                check_tpm_lockout(args.binary, base, tcti)
                 # Private simulator only: keep hardware DA below lockout while testing
                 # OpenSK's independent persistent eight-attempt limit across restarts.
                 subprocess.run(["tpm2_dictionarylockout","-T",tcti,"--setup-parameters",
