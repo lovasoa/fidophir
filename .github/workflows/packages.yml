@@ -58,10 +58,7 @@ jobs:
           # Checkout's temporary safe.directory configuration does not persist
           # into container job steps, which may run as a different user.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          base=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
-          # Commit count increases along main history, even when old builds are rerun.
-          commit_count=$(git rev-list --count HEAD)
-          version="${base}+git${commit_count}.${SOURCE_SHA:0:12}"
+          version=$(bash packaging/version.sh)
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "PACKAGE_VERSION=$version" >> "$GITHUB_ENV"
       - name: Fetch locked Cargo dependencies

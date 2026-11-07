@@ -15,6 +15,7 @@ output=${2:-dist}
 shift "$(( $# < 2 ? $# : 2 ))"
 mkdir -p "$output"
 output=$(cd "$output" && pwd)
+version=${PACKAGE_VERSION:-$(bash packaging/version.sh)}
 
 case "$format" in
   rpm)
@@ -23,7 +24,6 @@ case "$format" in
     if (( $# == 0 )) && ! rpm -qf "$(command -v rustc)" "$(command -v cargo)" >/dev/null 2>&1; then
       set -- --without system_rust
     fi
-    version=${PACKAGE_VERSION:-$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')}
     mkdir -p "$root/dist"
     topdir=$(mktemp -d "$root/dist/rpmbuild.XXXXXXXX")
     trap 'rm -rf -- "$topdir"' EXIT
@@ -40,8 +40,8 @@ case "$format" in
     fi
     ;;
   deb)
-    if [[ -n ${PACKAGE_VERSION:-} ]] && [[ $(dpkg-parsechangelog -S Version) != "$PACKAGE_VERSION" ]]; then
-      dch --newversion "$PACKAGE_VERSION" --distribution unstable "Build commit ${SOURCE_SHA:-$(git rev-parse HEAD)}."
+    if [[ $(dpkg-parsechangelog -S Version) != "$version" ]]; then
+      dch --newversion "$version" --distribution unstable "Build commit ${SOURCE_SHA:-$(git rev-parse HEAD)}."
     fi
     # Set DEB_IGNORE_BUILD_DEPS=1 only when dependencies are supplied outside dpkg (as in CI).
     args=(--build=binary --no-sign)

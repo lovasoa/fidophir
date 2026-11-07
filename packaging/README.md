@@ -26,7 +26,7 @@ If you already have rustup and want to avoid installing distro Rust, use `sudo d
 
 Packages are written to `dist/`. The RPM source archive contains tracked working-tree files, including local changes; untracked files are excluded.
 
-You can specify `rpm` or `deb` explicitly, followed by an output directory (default `dist`). Further arguments are passed to `rpmbuild` and replace automatic toolchain selection; for example, `./packaging/build.sh rpm dist --with system_rust` requires distro Rust. CI sets `PACKAGE_VERSION` to its commit-derived release version; for DEB builds this updates `debian/changelog`. `CARGO_FEATURES` selects build features, and CI sets `DEB_IGNORE_BUILD_DEPS=1` when Rust is supplied outside dpkg. Package builds run the recipe's tests.
+You can specify `rpm` or `deb` explicitly, followed by an output directory (default `dist`). Further arguments are passed to `rpmbuild` and replace automatic toolchain selection; for example, `./packaging/build.sh rpm dist --with system_rust` requires distro Rust. Local and CI builds use the same version: the Cargo version followed by the Git commit count and abbreviated commit SHA. A full Git history is required unless `PACKAGE_VERSION` is explicitly set. The version identifies the commit, so commit local changes before building a package intended to match CI; tracked working-tree changes are included in builds but not reflected in the version. DEB builds update `debian/changelog`. `CARGO_FEATURES` selects build features, and CI sets `DEB_IGNORE_BUILD_DEPS=1` when Rust is supplied outside dpkg. Package builds run the recipe's tests.
 
 To inspect the installation layout without installing a package, run `make install DESTDIR=/absolute/staging/path` after building.
 
