@@ -1,2 +1,2 @@
-# Canonical Fedora build image; the supported distribution stays Fedora 44.
+# Example RPM build environment; this image does not define package compatibility.
 FROM fedora:44@sha256:15da97ed9aa94dd3d92c3925eb89520f6c80e07ea7ee24cba848d1f8b6912b3e

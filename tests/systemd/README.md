@@ -8,7 +8,7 @@ major/minor and retriggers the actual installed udev rules. Privileged execution
 and writable sysfs/cgroups are confined
 to that disposable runner.
 
-The package is built through the regular Debian/RPM recipes with the
+The package is built through the regular DEB/RPM recipes with the
 `systemd-tests` Cargo feature. That feature changes only the TPM transport to
 the real tpm2-abrmd system-bus resource manager, backed by swtpm outside the
 service's private network. Production packages still use `/dev/tpmrm0` and are

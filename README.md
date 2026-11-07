@@ -42,14 +42,14 @@ See [design](DESIGN.md) for the security boundaries and implementation.
 
 You need a computer with a TPM, a local graphical desktop session, and administrator access to install the package. Use a disposable account while testing: browser and website compatibility on physical hardware is still being verified.
 
-On Fedora 44:
+For RPM-based systems (for example, Fedora with DNF):
 
 ```sh
 wget https://github.com/lovasoa/fidophir/releases/latest/download/fidophir.rpm
 sudo dnf install ./fidophir.rpm
 ```
 
-On Debian 13:
+For DEB-based systems (for example, Debian with APT):
 
 ```sh
 wget https://github.com/lovasoa/fidophir/releases/latest/download/fidophir.deb
@@ -60,7 +60,7 @@ The package starts Fidophir for each logged-in user. Each user has their own PIN
 
 ### Set your PIN
 
-1. Install the FIDO tools: `sudo dnf install fido2-tools` on Fedora or `sudo apt install fido2-tools` on Debian.
+1. Install the FIDO tools with your package manager, for example `sudo dnf install fido2-tools` or `sudo apt install fido2-tools`.
 2. Run `fido2-token -S /dev/fidophir-$(id -u)`. Choose a PIN of at least four characters and approve the desktop prompt if asked. The PIN is separate from your desktop login password.
 
 Set the PIN before enrolling with Firefox: Firefox on Linux may not offer to create one during website enrollment. Chrome may offer PIN setup during enrollment, but this flow has not yet been verified with Fidophir. Once set, the same Fidophir PIN works in both browsers.
@@ -143,7 +143,7 @@ Do not remove `tpm-parent.bin`: it protects all the user's passkeys. If the PIN 
 
 ## Build and test
 
-On Fedora 44, install the build tools:
+Install Rust, Cargo, a C compiler, Make, libclang, pkg-config, GLib development files (2.66 or newer), and TPM2-TSS development files. For example, on Fedora:
 
 ```sh
 sudo dnf install rust cargo gcc make clang-libs clang-devel pkgconf-pkg-config glib2-devel tpm2-tss-devel
