@@ -9,6 +9,11 @@ License: Apache-2.0
  The full license is installed in /usr/share/licenses/fidophir/LICENSE-APACHE.
  On Debian systems it is also in /usr/share/common-licenses/Apache-2.0.
 
+Files: packaging/io.github.lovasoa.fidophir.metainfo.xml
+Copyright: 2026 fidophir contributors
+License: MIT
+ See /usr/share/licenses/fidophir/LICENSE.
+
 Files: LICENSE
 Copyright: 2026 Ophir LOJKINE
 License: MIT

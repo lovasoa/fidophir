@@ -21,6 +21,28 @@ dpkg-buildpackage --build=binary --no-sign
 
 To inspect the installation layout without installing a package, run `make install DESTDIR=/absolute/staging/path` after building.
 
+## Icon and software-center metadata
+
+Both packages install the Fidophir icon in the hicolor theme as an SVG and
+64, 128 and 256 pixel PNGs, together with AppStream metadata identifying it as
+a background service (`generic`). The editable source is
+[`icons/io.github.lovasoa.fidophir.svg`](icons/io.github.lovasoa.fidophir.svg);
+the PNGs are rendered from it and checked in so package builds need no image tools.
+To regenerate them with librsvg's `rsvg-convert`, run from the repository root:
+
+```sh
+for size in 64 128 256; do
+  rsvg-convert --width "$size" --height "$size" \
+    packaging/icons/io.github.lovasoa.fidophir.svg > "packaging/icons/$size.png"
+done
+```
+
+Software centers can use the installed icon and metadata, or metadata supplied
+by a distribution's AppStream catalog. GNOME Software's PackageKit backend
+does not extract icons or metainfo from an uninstalled local DEB/RPM, so its
+local-file preview may still show a generic icon before installation. See
+[the backend's local-file handling](https://github.com/GNOME/gnome-software/blob/main/plugins/packagekit/gs-plugin-packagekit.c).
+
 ## Installation behavior
 
 The packages install the service template, a template dependency in `user@.service.wants` and an aggregate `fidophir.target`, device rules, polkit policy and service account. systemd starts `fidophir@UID.service` alongside each user manager and stops it with that manager. Existing logins are activated during installation. The RPM systemd macros and Debian `dh_installsystemd` manage the aggregate target; `PartOf=` propagates upgrades and removal to running instances without enumerating them. Debian activation respects `policy-rc.d`; its helper cannot directly start dependency-driven template instances, so the small installation hook consults the standard policy interface before activating existing logins. UHID is loaded and its device rules refreshed during installation, and modules-load handles subsequent boots. Package scripts tolerate chroots and unavailable hardware. No desktop account is modified, and no passkey is enrolled automatically.

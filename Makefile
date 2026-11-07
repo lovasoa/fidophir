@@ -36,6 +36,11 @@ install:
 	ln -sf ../fidophir@.service $(DESTDIR)$(PREFIX)/lib/systemd/system/user@.service.wants/fidophir@.service
 	install -Dm755 packaging/fidophir-package-setup $(DESTDIR)$(PREFIX)/libexec/fidophir-package-setup
 	install -Dm644 packaging/org.local.fidophir.policy $(DESTDIR)$(PREFIX)/share/polkit-1/actions/org.local.fidophir.policy
+	install -Dm644 packaging/io.github.lovasoa.fidophir.metainfo.xml $(DESTDIR)$(PREFIX)/share/metainfo/io.github.lovasoa.fidophir.metainfo.xml
+	install -Dm644 packaging/icons/io.github.lovasoa.fidophir.svg $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/io.github.lovasoa.fidophir.svg
+	set -e; for size in 64 128 256; do \
+		install -Dm644 packaging/icons/$$size.png $(DESTDIR)$(PREFIX)/share/icons/hicolor/$${size}x$${size}/apps/io.github.lovasoa.fidophir.png; \
+	done
 	install -Dm644 -t $(DESTDIR)$(PREFIX)/share/doc/fidophir README.md DESIGN.md VALIDATION.md
 	install -Dm644 packaging/README.md $(DESTDIR)$(PREFIX)/share/doc/fidophir/packaging/README.md
 	install -Dm644 -t $(DESTDIR)$(PREFIX)/share/licenses/fidophir LICENSE LICENSE-APACHE
