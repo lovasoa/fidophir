@@ -1,5 +1,7 @@
 # RPM package built from source with locked Cargo dependencies.
 # This is not a claim of distribution package-policy approval.
+# Use --without system_rust for a toolchain supplied outside RPM (e.g. rustup).
+%bcond system_rust 1
 %global debug_package %{nil}
 %{!?fidophir_version:%global fidophir_version 0.1.1}
 Name:           fidophir
@@ -8,8 +10,10 @@ Release:        1
 Summary:        Use your computer's security hardware for passkeys
 License:        Apache-2.0 AND MIT AND BSD-2-Clause AND BSD-3-Clause AND Unicode-3.0 AND (Apache-2.0 WITH LLVM-exception)
 Source0:        %{name}-%{version}.tar.gz
+%if %{with system_rust}
 BuildRequires:  cargo >= 1.92
 BuildRequires:  rust >= 1.92
+%endif
 BuildRequires:  gcc
 BuildRequires:  make
 BuildRequires:  python3
