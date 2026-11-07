@@ -561,16 +561,25 @@ impl KeyStore for Backend {
     }
     fn wrap_credential(
         &mut self,
-        _: CredentialSource,
+        credential: CredentialSource,
     ) -> std::result::Result<Vec<u8>, key_store::Error> {
-        Err(key_store::Error)
+        self.run(true, move |_, store| {
+            store.create_non_discoverable(credential)
+        })
+        .map_err(|_| key_store::Error)
     }
     fn unwrap_credential(
         &mut self,
-        _: &[u8],
-        _: &[u8],
+        bytes: &[u8],
+        rp_id_hash: &[u8],
     ) -> std::result::Result<Option<CredentialSource>, key_store::Error> {
-        Ok(None)
+        let (Ok(id), Ok(rp_hash)) = (bytes.try_into(), rp_id_hash.try_into()) else {
+            return Ok(None);
+        };
+        self.run(false, move |_, store| {
+            store.read_non_discoverable(&id, &rp_hash)
+        })
+        .map_err(|_| key_store::Error)
     }
     fn cred_random(&mut self, uv: bool) -> std::result::Result<Secret<[u8; 32]>, key_store::Error> {
         let access = self.0.pin_access.borrow();

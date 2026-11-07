@@ -224,9 +224,6 @@ fn prepare_command(
             | GetPinUvAuthTokenUsingUvWithPermissions => Ok(Preserve),
         },
         Command::AuthenticatorReset => Err(Status::CTAP2_ERR_NOT_ALLOWED),
-        Command::AuthenticatorMakeCredential(parameters) if !parameters.options.rk => {
-            Err(Status::CTAP2_ERR_UNSUPPORTED_OPTION)
-        }
         protected => {
             // Default-deny applies to new commands too, particularly credential
             // management and continuation commands that may never touch TPM.
