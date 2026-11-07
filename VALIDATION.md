@@ -31,6 +31,7 @@ Example test systems: Fedora 44 and 45.
 - Valid and malformed HID packets were tested.
 - webauthn.io registration and authentication passed in Firefox.
 - webauthn.io registration and authentication passed in the in-app browser.
+- Passkey sign-in succeeded on GitHub, Google, Microsoft, and Cloudflare.
 - v2 state corruption and recovery were tested.
 - Concurrent FIDO requests and service restarts were tested.
 - [Issue #5](https://github.com/lovasoa/fidophir/issues/5) tracks incorrect free-slot reporting for malformed credentials.
@@ -42,7 +43,6 @@ Example test systems: Fedora 44 and 45.
 - Reboot.
 - Multiple users, sessions, lock, and logout.
 - Desktop approval denial and cancellation.
-- Google and GitHub passkeys.
 - Power-loss recovery.
 - Determine the cause of concurrent-client timeouts.
 - Clean package builds with declared dependencies.

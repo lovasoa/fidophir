@@ -40,7 +40,7 @@ See [design](DESIGN.md) for the security boundaries and implementation.
 
 ## Install for testing
 
-You need a computer with a TPM, a local graphical desktop session, and administrator access to install the package. Use a disposable account while testing: browser and website compatibility on physical hardware is still being verified.
+You need a computer with a TPM, a local graphical desktop session, and administrator access to install the package. Passkey sign-in has been validated on GitHub, Google, Microsoft, and Cloudflare. Use a disposable account while testing: other browser and website combinations may not work.
 
 For RPM-based systems (for example, Fedora with DNF):
 
