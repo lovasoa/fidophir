@@ -4,20 +4,25 @@ The repository builds RPM and DEB packages for Linux systems with systemd. These
 
 ## Build packages
 
-For an RPM, install `rpmbuild` and the `BuildRequires` in `fidophir.spec` using your package manager, then run:
+On Fedora, build and install an RPM from the checkout:
 
 ```sh
-mkdir -p dist/rpmbuild/SOURCES
-git ls-files -z | tar --null --files-from=- \
-  --transform 's,^,fidophir-0.1.1/,' -czf dist/rpmbuild/SOURCES/fidophir-0.1.1.tar.gz
-rpmbuild -ba --define "_topdir $(pwd)/dist/rpmbuild" packaging/fidophir.spec
+sudo dnf install rpm-build dnf-plugins-core
+sudo dnf builddep packaging/fidophir.spec
+./packaging/build.sh rpm
+sudo dnf install ./dist/fidophir-*."$(rpm --eval '%{_arch}')".rpm
 ```
 
-For a DEB, install the build dependencies listed in `debian/control` and run from the checkout:
+On Debian, install the build dependencies listed in `debian/control` plus `dpkg-dev`, then build and install:
 
 ```sh
-dpkg-buildpackage --build=binary --no-sign
+./packaging/build.sh deb
+sudo apt install ./dist/fidophir_*.deb
 ```
+
+Packages are written to `dist/`. The RPM source archive contains tracked working-tree files, including local changes; untracked files are excluded.
+
+The script accepts an optional output directory as its second argument. CI sets `PACKAGE_VERSION` to its commit-derived release version; for DEB builds this updates `debian/changelog`. `CARGO_FEATURES` selects build features, and CI sets `DEB_IGNORE_BUILD_DEPS=1` when Rust is supplied outside dpkg. Package builds run the recipe's tests.
 
 To inspect the installation layout without installing a package, run `make install DESTDIR=/absolute/staging/path` after building.
 

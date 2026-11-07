@@ -45,23 +45,29 @@ You need a computer with a TPM, a local graphical desktop session, and administr
 For RPM-based systems (for example, Fedora with DNF):
 
 ```sh
-wget https://github.com/lovasoa/fidophir/releases/latest/download/fidophir.rpm
-sudo dnf install ./fidophir.rpm
+sudo dnf install https://github.com/lovasoa/fidophir/releases/latest/download/fidophir.rpm fido2-tools
 ```
 
 For DEB-based systems (for example, Debian with APT):
 
 ```sh
-wget https://github.com/lovasoa/fidophir/releases/latest/download/fidophir.deb
-sudo apt install ./fidophir.deb
+wget -O fidophir.deb https://github.com/lovasoa/fidophir/releases/latest/download/fidophir.deb
+sudo apt install ./fidophir.deb fido2-tools
 ```
+
+To update on Fedora, run the RPM command again with `upgrade` in place of `install`. On Debian, download the latest DEB and run the same `apt install` command again. These commands do not configure automatic updates.
 
 The package starts Fidophir for each logged-in user. Each user has their own PIN and passkeys; no logout or account configuration is needed.
 
 ### Set your PIN
 
-1. Install the FIDO tools with your package manager, for example `sudo dnf install fido2-tools` or `sudo apt install fido2-tools`.
-2. Run `fido2-token -S /dev/fidophir-$(id -u)`. Choose a PIN of at least four characters and approve the desktop prompt if asked. The PIN is separate from your desktop login password.
+Run this in your desktop account, choose a PIN of at least four characters, and approve the desktop prompt if asked:
+
+```sh
+fido2-token -S /dev/fidophir-$(id -u)
+```
+
+The PIN is separate from your desktop login password.
 
 Set the PIN before enrolling with Firefox: Firefox on Linux may not offer to create one during website enrollment. Chrome may offer PIN setup during enrollment, but this flow has not yet been verified with Fidophir. Once set, the same Fidophir PIN works in both browsers.
 
@@ -107,17 +113,15 @@ State lives under `/var/lib/fidophir-users/UID/v2/`. Each credential has a numbe
 
 Resetting deletes **all your Fidophir passkeys** on this computer. You will need another sign-in or recovery method for each website, then add new passkeys. Other users' Fidophir passkeys are unaffected.
 
-1. Open a terminal in your own desktop account, stop the service and delete your state:
+Run this in your own desktop account:
 
-   ```sh
-   sudo systemctl stop "fidophir@$(id -u).service" && sudo rm -rf -- "/var/lib/fidophir-users/$(id -u)/v2"
-   ```
+```sh
+sudo systemctl stop "fidophir@$(id -u).service" &&
+  sudo rm -rf -- "/var/lib/fidophir-users/$(id -u)/v2" &&
+  sudo systemctl start "fidophir@$(id -u).service"
+```
 
-2. Start the service again, then set a new PIN and add passkeys as described above:
-
-   ```sh
-   sudo systemctl start "fidophir@$(id -u).service"
-   ```
+Then [set a new PIN](#set-your-pin) and add your passkeys again.
 
 If the TPM itself is locked, resetting Fidophir does not clear that lockout. Check the service journal as described above and wait for the TPM lockout to clear before trying again.
 The journal reports the TPM's configured recovery interval when available; this is not the exact time remaining. TPM resets or loss of power can delay recovery. A confirmed TPM lockout does not consume a Fidophir PIN attempt.
@@ -143,20 +147,19 @@ Do not remove `tpm-parent.bin`: it protects all the user's passkeys. If the PIN 
 
 ## Build and test
 
-Install Rust, Cargo, a C compiler, Make, libclang, pkg-config, GLib development files (2.66 or newer), and TPM2-TSS development files. For example, on Fedora:
+Install Rust, Cargo, a C compiler, Make, Python 3, libclang, pkg-config, GLib development files (2.66 or newer), and TPM2-TSS development files. For example, on Fedora:
 
 ```sh
-sudo dnf install rust cargo gcc make clang-libs clang-devel pkgconf-pkg-config glib2-devel tpm2-tss-devel
+sudo dnf install rust cargo gcc make python3 clang-libs clang-devel pkgconf-pkg-config glib2-devel tpm2-tss-devel
 ```
 
 Rust and Cargo 1.92 or newer are required. From a Git checkout:
 
 ```sh
-make build
-make test
+make build test
 ```
 
-See [validation](VALIDATION.md) for simulator tests and hardware acceptance checks.
+To build an RPM or DEB from source, see the [package build instructions](packaging/README.md#build-packages). See [validation](VALIDATION.md) for simulator tests and hardware acceptance checks.
 
 ## Related projects
 

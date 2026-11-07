@@ -77,12 +77,7 @@ jobs:
       - name: Build RPM from tracked sources
         shell: bash
         run: |
-          mkdir -p rpmbuild/SOURCES dist
-          git ls-files -z | tar --null --files-from=- \
-            --transform "s,^,fidophir-${PACKAGE_VERSION}/," \
-            -czf "rpmbuild/SOURCES/fidophir-${PACKAGE_VERSION}.tar.gz"
-          rpmbuild -ba --define "_topdir $PWD/rpmbuild" --define "fidophir_version $PACKAGE_VERSION" packaging/fidophir.spec
-          cp rpmbuild/RPMS/x86_64/*.rpm rpmbuild/SRPMS/*.rpm dist/
+          bash packaging/build.sh rpm
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: packages-rpm
@@ -92,9 +87,7 @@ jobs:
 
       - name: Build a simulator transport variant through the normal RPM recipe
         run: |
-          CARGO_FEATURES=systemd-tests rpmbuild -bb --define "_topdir $PWD/rpmbuild" --define "fidophir_version $PACKAGE_VERSION" packaging/fidophir.spec
-          mkdir -p systemd-packages
-          cp rpmbuild/RPMS/x86_64/*.rpm systemd-packages/
+          CARGO_FEATURES=systemd-tests RPM_BINARY_ONLY=1 bash packaging/build.sh rpm systemd-packages
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: systemd-package-rpm
@@ -123,13 +116,7 @@ jobs:
       - name: Build DEB from the same commit
         shell: bash
         run: |
-          dch --newversion "$PACKAGE_VERSION" --distribution unstable "Build commit $SOURCE_SHA."
-          rustc --version
-          cargo --version
-          # Rust/Cargo are supplied by the pinned official image, not dpkg.
-          dpkg-buildpackage --build=binary --no-sign -d
-          mkdir -p dist
-          cp ../fidophir_*.deb dist/
+          DEB_IGNORE_BUILD_DEPS=1 bash packaging/build.sh deb
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: packages-deb
@@ -138,9 +125,7 @@ jobs:
 
       - name: Build a simulator transport variant through the normal DEB recipe
         run: |
-          CARGO_FEATURES=systemd-tests dpkg-buildpackage --build=binary --no-sign -d
-          mkdir -p systemd-packages
-          cp ../fidophir_*.deb systemd-packages/
+          CARGO_FEATURES=systemd-tests DEB_IGNORE_BUILD_DEPS=1 bash packaging/build.sh deb systemd-packages
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: systemd-package-deb
