@@ -174,9 +174,9 @@ def check_logging(binary, base, tcti):
         output.seek(0)
         log = output.read().decode()
     for phrase in ("Create passkey: completed", "Sign with passkey: completed",
-                   "request options rk=false uv=false pin_auth_present=false pin_protocol_present=false es256_offered=true",
-                   "request options up=true uv=false pin_auth_present=true pin_protocol_present=true allow_list_present=true",
-                   "Set up security key PIN: completed", "incorrect PIN", "duration_ms=", "<4>", "<6>"):
+                   "request options resident_key=false user_verification=false pin_authentication_present=false pin_authentication_protocol_present=false es256_offered=true",
+                   "request options user_presence=true user_verification=false pin_authentication_present=true pin_authentication_protocol_present=true allow_list_present=true",
+                   "Set up security key PIN: completed", "incorrect PIN", "duration_milliseconds=", "<4>", "<6>"):
         assert phrase in log, (phrase, log)
     for secret in (pin, "private-user-handle-58921", "private-site.example", "private-wrong-pin-7139",
                    "Test account", "private-missing-credential-7219", credential.credential_id.hex(),
@@ -189,7 +189,7 @@ def check_logging(binary, base, tcti):
     starts = re.findall(r"request=(\d+) .*: started", log)
     assert len(starts) == len(set(starts)), "request numbers were reused"
     for request in starts:
-        assert re.search(rf"request={request} .*status=0x[0-9a-f]{{2}} duration_ms=\d+", log), log
+        assert re.search(rf"request={request} .*status=0x[0-9a-f]{{2}} duration_milliseconds=\d+", log), log
     print("PASS: readable interaction results, priorities, correlation and private data exclusion", flush=True)
 
 

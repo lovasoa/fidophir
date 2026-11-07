@@ -91,7 +91,7 @@ impl Interaction {
         if !quiet || status != ResponseStatus::Known(Status::CTAP2_OK) {
             log::log!(
                 status.level(),
-                "{}: {}; status={} duration_ms={}",
+                "{}: {}; status={} duration_milliseconds={}",
                 self.name,
                 status.outcome(),
                 status,
@@ -108,34 +108,34 @@ enum RequestContext {
 }
 
 struct MakeCredentialContext {
-    rk: bool,
-    uv: bool,
+    resident_key: bool,
+    user_verification: bool,
     // Presence only: the authentication parameter itself is secret.
-    pin_auth_present: bool,
-    pin_protocol_present: bool,
+    pin_authentication_present: bool,
+    pin_authentication_protocol_present: bool,
     es256_offered: bool,
     // Presence only: the list contains credential identifiers.
     exclude_list_present: bool,
     hmac_secret: bool,
-    cred_protect_present: bool,
+    credential_protection_present: bool,
     // Presence only: the blob may contain arbitrary private data.
-    cred_blob_present: bool,
+    credential_blob_present: bool,
     large_blob_key_present: bool,
-    min_pin_length: bool,
+    minimum_pin_length: bool,
     enterprise_attestation_present: bool,
 }
 
 struct GetAssertionContext {
-    up: bool,
-    uv: bool,
+    user_presence: bool,
+    user_verification: bool,
     // Presence only: the authentication parameter itself is secret.
-    pin_auth_present: bool,
-    pin_protocol_present: bool,
+    pin_authentication_present: bool,
+    pin_authentication_protocol_present: bool,
     // Presence only: the list contains credential identifiers.
     allow_list_present: bool,
     // Presence only: the extension contains encrypted salts.
     hmac_secret_present: bool,
-    cred_blob: bool,
+    credential_blob: bool,
     large_blob_key_present: bool,
 }
 
@@ -144,30 +144,30 @@ impl fmt::Display for RequestContext {
         match self {
             Self::MakeCredential(p) => write!(
                 f,
-                "rk={} uv={} pin_auth_present={} pin_protocol_present={} es256_offered={} exclude_list_present={} hmac_secret={} cred_protect_present={} cred_blob_present={} large_blob_key_present={} min_pin_length={} enterprise_attestation_present={}",
-                p.rk,
-                p.uv,
-                p.pin_auth_present,
-                p.pin_protocol_present,
+                "resident_key={} user_verification={} pin_authentication_present={} pin_authentication_protocol_present={} es256_offered={} exclude_list_present={} hmac_secret={} credential_protection_present={} credential_blob_present={} large_blob_key_present={} minimum_pin_length={} enterprise_attestation_present={}",
+                p.resident_key,
+                p.user_verification,
+                p.pin_authentication_present,
+                p.pin_authentication_protocol_present,
                 p.es256_offered,
                 p.exclude_list_present,
                 p.hmac_secret,
-                p.cred_protect_present,
-                p.cred_blob_present,
+                p.credential_protection_present,
+                p.credential_blob_present,
                 p.large_blob_key_present,
-                p.min_pin_length,
+                p.minimum_pin_length,
                 p.enterprise_attestation_present
             ),
             Self::GetAssertion(p) => write!(
                 f,
-                "up={} uv={} pin_auth_present={} pin_protocol_present={} allow_list_present={} hmac_secret_present={} cred_blob={} large_blob_key_present={}",
-                p.up,
-                p.uv,
-                p.pin_auth_present,
-                p.pin_protocol_present,
+                "user_presence={} user_verification={} pin_authentication_present={} pin_authentication_protocol_present={} allow_list_present={} hmac_secret_present={} credential_blob={} large_blob_key_present={}",
+                p.user_presence,
+                p.user_verification,
+                p.pin_authentication_present,
+                p.pin_authentication_protocol_present,
                 p.allow_list_present,
                 p.hmac_secret_present,
-                p.cred_blob,
+                p.credential_blob,
                 p.large_blob_key_present
             ),
         }
@@ -178,32 +178,32 @@ fn request_context(command: Option<&Command>) -> Option<RequestContext> {
     match command? {
         Command::AuthenticatorMakeCredential(p) => {
             Some(RequestContext::MakeCredential(MakeCredentialContext {
-                rk: p.options.rk,
-                uv: p.options.uv,
-                pin_auth_present: p.pin_uv_auth_param.is_some(),
-                pin_protocol_present: p.pin_uv_auth_protocol.is_some(),
+                resident_key: p.options.rk,
+                user_verification: p.options.uv,
+                pin_authentication_present: p.pin_uv_auth_param.is_some(),
+                pin_authentication_protocol_present: p.pin_uv_auth_protocol.is_some(),
                 es256_offered: p
                     .pub_key_cred_params
                     .iter()
                     .any(|param| param.alg == SignatureAlgorithm::Es256),
                 exclude_list_present: p.exclude_list.is_some(),
                 hmac_secret: p.extensions.hmac_secret,
-                cred_protect_present: p.extensions.cred_protect.is_some(),
-                cred_blob_present: p.extensions.cred_blob.is_some(),
+                credential_protection_present: p.extensions.cred_protect.is_some(),
+                credential_blob_present: p.extensions.cred_blob.is_some(),
                 large_blob_key_present: p.extensions.large_blob_key.is_some(),
-                min_pin_length: p.extensions.min_pin_length,
+                minimum_pin_length: p.extensions.min_pin_length,
                 enterprise_attestation_present: p.enterprise_attestation.is_some(),
             }))
         }
         Command::AuthenticatorGetAssertion(p) => {
             Some(RequestContext::GetAssertion(GetAssertionContext {
-                up: p.options.up,
-                uv: p.options.uv,
-                pin_auth_present: p.pin_uv_auth_param.is_some(),
-                pin_protocol_present: p.pin_uv_auth_protocol.is_some(),
+                user_presence: p.options.up,
+                user_verification: p.options.uv,
+                pin_authentication_present: p.pin_uv_auth_param.is_some(),
+                pin_authentication_protocol_present: p.pin_uv_auth_protocol.is_some(),
                 allow_list_present: p.allow_list.is_some(),
                 hmac_secret_present: p.extensions.hmac_secret.is_some(),
-                cred_blob: p.extensions.cred_blob,
+                credential_blob: p.extensions.cred_blob,
                 large_blob_key_present: p.extensions.large_blob_key.is_some(),
             }))
         }
