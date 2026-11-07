@@ -20,6 +20,8 @@ On Debian, install the build dependencies listed in `debian/control` plus `dpkg-
 sudo apt install ./dist/fidophir_*.deb
 ```
 
+Rust and Cargo 1.92 or newer may be installed through rustup or your package manager. If they come from rustup, `dnf builddep` may also install the distribution toolchain; the build script uses the tools on your PATH and checks the remaining dependencies against RPM.
+
 Packages are written to `dist/`. The RPM source archive contains tracked working-tree files, including local changes; untracked files are excluded.
 
 The script accepts an optional output directory as its second argument. CI sets `PACKAGE_VERSION` to its commit-derived release version; for DEB builds this updates `debian/changelog`. `CARGO_FEATURES` selects build features, and CI sets `DEB_IGNORE_BUILD_DEPS=1` when Rust is supplied outside dpkg. Package builds run the recipe's tests.
