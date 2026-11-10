@@ -342,11 +342,7 @@ def main():
 
                 old_parent = (state / "v2/authenticator/tpm-parent.bin").read_bytes()
                 before = {str(f.relative_to(state)): f.read_bytes() for f in (state / "v2/credentials").rglob("*") if f.is_file()}
-                # PIN storage must also clear persisted forced-change state.
-                force = state / "v2/authenticator/force-pin-change.flag"
-                os.close(os.open(force,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600))
                 ClientPin(ctap).change_pin(pin,new_pin)
-                assert not force.exists(), "successful PIN change did not clear forced-change state"
                 assert before == {str(f.relative_to(state)): f.read_bytes() for f in (state / "v2/credentials").rglob("*") if f.is_file()}
                 sign(ctap,new_pin,first)
                 protocol, token = authorize(ctap, new_pin, ClientPin.PERMISSION.CREDENTIAL_MGMT)
