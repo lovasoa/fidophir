@@ -3,7 +3,7 @@
 //!
 //! This scope confers no authorization: `Backend` still checks its own PIN access.
 //! It only identifies the instance executing this synchronous OpenSK command.
-use crate::backend::{Backend, adapter_invariant};
+use crate::backend::Backend;
 use std::cell::RefCell;
 
 thread_local! {
@@ -21,9 +21,7 @@ impl Drop for BackendScope {
 pub(crate) fn with_backend<T>(backend: &Backend, dispatch: impl FnOnce() -> T) -> T {
     ACTIVE_BACKEND.with(|active| {
         let mut active = active.borrow_mut();
-        if active.is_some() {
-            adapter_invariant("dispatch-scope", "nested-dispatch");
-        }
+        assert!(active.is_none(), "nested OpenSK dispatch");
         *active = Some(backend.clone());
     });
     let _scope = BackendScope;
@@ -36,6 +34,6 @@ pub(crate) fn current_backend() -> Backend {
         active
             .borrow()
             .clone()
-            .unwrap_or_else(|| adapter_invariant("dispatch-scope", "missing-backend"))
+            .expect("OpenSK crypto callback outside dispatch")
     })
 }

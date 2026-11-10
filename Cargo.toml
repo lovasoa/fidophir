@@ -15,7 +15,6 @@ systemd-tests = []
 
 [dependencies]
 log = "0.4.35"
-# Review the adapter contract in src/opensk_adapter.rs before updating OpenSK.
 opensk = { git = "https://github.com/google/OpenSK.git", branch = "develop", default-features = false, features = ["software_crypto"] }
 sk-cbor = { git = "https://github.com/google/OpenSK.git", branch = "develop" }
 glib = { version = "0.22.10", features = ["v2_66"] }

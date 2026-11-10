@@ -63,7 +63,6 @@ jobs:
           title: 'chore(deps): update Cargo ${{ matrix.track }} dependencies'
           body: |
             Update Cargo dependencies and Cargo.lock.
-            OpenSK version changes require the adapter contract review in src/opensk_adapter.rs.
             The package workflow is dispatched explicitly because PRs created with GITHUB_TOKEN do not trigger pull_request workflows.
           delete-branch: true
       - name: Test the dependency PR

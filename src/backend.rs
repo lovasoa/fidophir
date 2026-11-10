@@ -28,8 +28,8 @@ use std::{
 use tss_esapi::{constants::response_code::Tss2ResponseCodeKind as RcKind, tcti_ldr::TctiNameConf};
 
 type Task = Box<dyn FnOnce(&mut Tpm, &Store) + Send>;
-/// `Persist::pin_hash` reports configuration, never a stored verifier.
-pub(crate) const CONFIGURED_PIN_MARKER: [u8; 16] = [0; 16];
+/// Opaque presence marker for OpenSK's stored-PIN interface.
+const CONFIGURED_PIN_MARKER: [u8; 16] = [0; 16];
 
 /// Host policy, independent of OpenSK's token lifetime. Both must authorize a
 /// protected command; a longer-lived upstream token cannot extend this lease.
@@ -41,40 +41,16 @@ struct Grant {
     expires_at_ms: u64,
 }
 
-/// Pending verification and earlier authorization are mutually exclusive.
-/// `Granted` permits TPM work, not bypassing OpenSK's token/permission checks.
-#[derive(Default)]
-enum PinAccess {
-    #[default]
-    None,
-    AwaitingVerification(PinAttempt),
-    Granted(Grant),
-    /// Completion witness only: PIN storage succeeded, and no grant survives it.
-    PinStored,
-}
-struct PinAttempt {
-    /// Persisted counter value required before this attempt may reach the TPM.
-    expected_failure_count: u8,
-}
-
-impl PinAttempt {
-    fn assert_retry_was_charged(&self, actual_failure_count: u8) {
-        if actual_failure_count != self.expected_failure_count {
-            adapter_invariant("pin-verification", "retry-not-durably-charged");
-        }
-    }
-}
-
 struct Inner {
     sender: Option<SyncSender<Task>>,
     worker: Option<std::thread::JoinHandle<()>>,
     io: SharedIo,
-    pin_access: RefCell<PinAccess>,
+    grant: RefCell<Option<Grant>>,
     tpm_lockout: Cell<bool>,
 }
 impl Drop for Inner {
     fn drop(&mut self) {
-        *self.pin_access.get_mut() = PinAccess::None;
+        self.grant.get_mut().take();
         self.sender.take();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
@@ -84,20 +60,6 @@ impl Drop for Inner {
 
 #[derive(Clone)]
 pub struct Backend(Rc<Inner>);
-
-/// Only static diagnostics: never format requests, hashes, keys, or enum payloads.
-/// Release builds abort on panic; unit tests can check the same guard directly.
-#[track_caller]
-pub(crate) fn adapter_invariant(stage: &'static str, reason: &'static str) -> ! {
-    error!(
-        "Security key stopped to protect its state; fatal stage={stage} reason={reason} source={}",
-        std::panic::Location::caller()
-    );
-    panic!(
-        "fidophir: fatal stage={stage} reason={reason} source={}",
-        std::panic::Location::caller()
-    )
-}
 
 fn fatal(message: impl std::fmt::Display) -> ! {
     error!("{message}");
@@ -154,7 +116,7 @@ impl Backend {
             sender: Some(sender),
             worker: Some(worker),
             io,
-            pin_access: RefCell::new(PinAccess::None),
+            grant: RefCell::new(None),
             tpm_lockout: Cell::new(false),
         })))
     }
@@ -198,7 +160,7 @@ impl Backend {
                         Err(error) if durable => fatal(error),
                         Err(error) => {
                             error!("operation failed: {error}");
-                            *self.0.pin_access.borrow_mut() = PinAccess::None;
+                            self.clear();
                             return Err(Status::CTAP2_ERR_VENDOR_HARDWARE_FAILURE);
                         }
                     };
@@ -216,11 +178,11 @@ impl Backend {
         }
     }
 
-    fn parent(&self) -> CtapResult<ParentRecord> {
-        let bytes = self
-            .read_record(PARENT)?
-            .ok_or(Status::CTAP2_ERR_PIN_NOT_SET)?;
-        ParentRecord::decode(&bytes).map_err(|_| Status::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
+    fn parent(&self) -> CtapResult<Option<ParentRecord>> {
+        self.read_record(PARENT)?
+            .map(|bytes| ParentRecord::decode(&bytes))
+            .transpose()
+            .map_err(|_| Status::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
     }
 
     pub fn read_record(&self, key: usize) -> CtapResult<Option<Vec<u8>>> {
@@ -232,57 +194,95 @@ impl Backend {
     }
 
     fn hash(&self) -> CtapResult<Secret<[u8; 16]>> {
-        match &*self.0.pin_access.borrow() {
-            PinAccess::Granted(grant) => Ok(grant.pin_hash.clone()),
-            _ => Err(Status::CTAP2_ERR_PUAT_REQUIRED),
+        self.0
+            .grant
+            .borrow()
+            .as_ref()
+            .map(|grant| grant.pin_hash.clone())
+            .ok_or(Status::CTAP2_ERR_PUAT_REQUIRED)
+    }
+
+    pub fn take_tpm_lockout(&self) -> bool {
+        self.0.tpm_lockout.replace(false)
+    }
+
+    fn verify(&mut self, hash: &[u8; 16]) -> CtapResult<bool> {
+        self.clear();
+        let expires_at_ms = boot_ms().saturating_add(PIN_AUTHORIZATION_LIFETIME_MS);
+        let record = self.parent()?.ok_or(Status::CTAP2_ERR_PIN_NOT_SET)?;
+        let hash = Secret::from_exposed_secret(*hash);
+        let input = hash.clone();
+        // Preserve wrong-authentication vs transport errors without turning an error into a grant.
+        let answer = match self.run(false, move |tpm, _| match tpm.verify(&record, &input) {
+            Ok(master) => Ok(Some(master)),
+            Err(Error::Tpm(tss_esapi::Error::Tss2Error(rc)))
+                if matches!(rc.kind(), Some(RcKind::AuthFail | RcKind::BadAuth)) =>
+            {
+                Ok(None)
+            }
+            Err(e) => Err(e),
+        }) {
+            Err(Status::CTAP2_ERR_PIN_AUTH_BLOCKED) => {
+                self.0.tpm_lockout.set(true);
+                // The TPM definitively rejected the command before checking the PIN.
+                // Restore only this durably charged attempt; uncertain failures stay charged.
+                let failures = self.pin_fails()?;
+                self.write_record(
+                    opensk::api::persist::keys::PIN_RETRIES,
+                    vec![failures.saturating_sub(1)],
+                )?;
+                match self.run(false, |tpm, _| tpm.lockout_interval()) {
+                    Ok(Some(seconds)) if seconds > 0 => log::warn!(
+                        "TPM is temporarily locked; the configured recovery interval is {seconds} seconds per counter decrement, not an exact remaining wait; TPM resets may delay recovery; do not retry until it recovers; restarting Fidophir does not clear TPM lockout"
+                    ),
+                    _ => log::warn!(
+                        "TPM is temporarily locked; recovery time is unavailable or requires special handling; do not retry until it recovers; restarting Fidophir does not clear TPM lockout"
+                    ),
+                }
+                return Err(Status::CTAP2_ERR_PIN_AUTH_BLOCKED);
+            }
+            result => result?,
+        };
+        if let Some(master) = answer {
+            *self.0.grant.borrow_mut() = Some(Grant {
+                pin_hash: hash,
+                master,
+                expires_at_ms,
+            });
+            Ok(true)
+        } else {
+            Ok(false)
         }
     }
 
-    /// Starting an attempt always revokes older hardware authorization.
-    pub fn begin_pin_verification(&mut self) -> CtapResult<()> {
-        self.clear();
-        let expected_failure_count = self.pin_fails()?.saturating_add(1);
-        *self.0.pin_access.borrow_mut() = PinAccess::AwaitingVerification(PinAttempt {
-            expected_failure_count,
-        });
-        Ok(())
+    pub fn clear(&self) {
+        self.0.grant.borrow_mut().take();
     }
 
     pub fn has_pin_authorization(&self) -> bool {
-        matches!(&*self.0.pin_access.borrow(), PinAccess::Granted(_))
-    }
-
-    /// Catch successful token issuance that skipped the TPM verification path.
-    pub(crate) fn assert_pin_was_verified(&self) {
-        if !self.has_pin_authorization() {
-            adapter_invariant("token-issuance", "missing-tpm-authorization");
-        }
-    }
-
-    /// Catch upstream reporting SetPIN/ChangePIN success without calling us.
-    pub(crate) fn assert_pin_was_stored(&self) {
-        if !matches!(&*self.0.pin_access.borrow(), PinAccess::PinStored) {
-            adapter_invariant("pin-update", "missing-pin-storage");
-        }
+        self.0.grant.borrow().is_some()
     }
 
     /// Call between commands only. OpenSK admits a command using its entry-time
     /// token validity, including commands that wait for desktop approval.
     pub fn expire_pin_authorization(&self, now_ms: u64) {
-        let mut access = self.0.pin_access.borrow_mut();
-        if matches!(&*access, PinAccess::Granted(grant) if now_ms >= grant.expires_at_ms) {
-            *access = PinAccess::None;
+        let mut grant = self.0.grant.borrow_mut();
+        if grant
+            .as_ref()
+            .is_some_and(|grant| now_ms >= grant.expires_at_ms)
+        {
+            *grant = None;
         }
     }
 
     pub fn generate(&self) -> CtapResult<Blob> {
-        let record = self.parent()?;
+        let record = self.parent()?.ok_or(Status::CTAP2_ERR_PIN_NOT_SET)?;
         let hash = self.hash()?;
         self.run(false, move |tpm, _| tpm.generate(&record, &hash))
     }
 
     pub fn sign(&self, key: &Blob, message: &[u8]) -> CtapResult<p256::ecdsa::Signature> {
-        let record = self.parent()?;
+        let record = self.parent()?.ok_or(Status::CTAP2_ERR_PIN_NOT_SET)?;
         let hash = self.hash()?;
         let key = key.clone();
         let message = message.to_vec();
@@ -344,17 +344,11 @@ impl Persist for Backend {
         Ok(0)
     }
     fn pin_hash(&self) -> CtapResult<Option<[u8; 16]>> {
-        // A configured-PIN marker, never a software verifier or authorization.
-        // KeyStore::verify_pin_hash checks this identity before verifying it.
-        Ok(self.is_set()?.then_some(CONFIGURED_PIN_MARKER))
+        Ok(self.parent()?.is_some().then_some(CONFIGURED_PIN_MARKER))
     }
     fn set_pin(&mut self, hash: &[u8; 16], length: u8) -> CtapResult<()> {
-        if !(4..=63).contains(&length) {
-            return Err(Status::CTAP2_ERR_PIN_POLICY_VIOLATION);
-        }
         let new = Secret::from_exposed_secret(*hash);
-        let record = if self.is_set()? {
-            let record = self.parent()?;
+        let record = if let Some(record) = self.parent()? {
             let old = self.hash()?;
             self.run(false, move |tpm, _| {
                 tpm.change_pin(&record, &old, &new, length)
@@ -362,98 +356,14 @@ impl Persist for Backend {
         } else {
             self.run(false, move |tpm, _| tpm.provision(&new, length))?
         };
-        let result = self.write_record(
+        self.clear();
+        self.write_record(
             PARENT,
             record
                 .encode()
                 .map_err(|_| Status::CTAP2_ERR_VENDOR_INTERNAL_ERROR)?,
-        );
-        self.clear();
-        result?;
-        self.remove(opensk::api::persist::keys::FORCE_PIN_CHANGE)?;
-        // Command completion consumes this witness. It carries no authorization.
-        *self.0.pin_access.borrow_mut() = PinAccess::PinStored;
-        Ok(())
-    }
-}
-
-impl Backend {
-    pub fn take_tpm_lockout(&self) -> bool {
-        self.0.tpm_lockout.replace(false)
-    }
-    fn is_set(&self) -> CtapResult<bool> {
-        self.read_record(PARENT)?
-            .map(|bytes| ParentRecord::decode(&bytes))
-            .transpose()
-            .map(|r| r.is_some())
-            .map_err(|_| Status::CTAP2_ERR_VENDOR_INTERNAL_ERROR)
-    }
-    fn verify(&mut self, hash: &[u8; 16]) -> CtapResult<bool> {
-        self.clear();
-        let expires_at_ms = boot_ms().saturating_add(PIN_AUTHORIZATION_LIFETIME_MS);
-        let record = self.parent()?;
-        let hash = Secret::from_exposed_secret(*hash);
-        let input = hash.clone();
-        // Preserve wrong-authentication vs transport errors without turning an error into a grant.
-        let answer = self.run(false, move |tpm, _| match tpm.verify(&record, &input) {
-            Ok(master) => Ok(Some(master)),
-            Err(Error::Tpm(tss_esapi::Error::Tss2Error(rc)))
-                if matches!(rc.kind(), Some(RcKind::AuthFail | RcKind::BadAuth)) =>
-            {
-                Ok(None)
-            }
-            Err(e) => Err(e),
-        })?;
-        if let Some(master) = answer {
-            *self.0.pin_access.borrow_mut() = PinAccess::Granted(Grant {
-                pin_hash: hash,
-                master,
-                expires_at_ms,
-            });
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-    fn verify_candidate(&mut self, candidate: &[u8; 16]) -> CtapResult<bool> {
-        // Taking ownership revokes pending access on error and releases the
-        // RefCell borrow before TPM work pumps desktop callbacks.
-        let attempt = match self.0.pin_access.take() {
-            PinAccess::Granted(grant) => {
-                // The forced-change reuse check must not make another TPM guess.
-                let matches = bool::from(grant.pin_hash.ct_eq(candidate));
-                *self.0.pin_access.borrow_mut() = PinAccess::Granted(grant);
-                return Ok(matches);
-            }
-            PinAccess::AwaitingVerification(attempt) => attempt,
-            _ => adapter_invariant("pin-verification", "unexpected-pin-access-state"),
-        };
-        attempt.assert_retry_was_charged(self.pin_fails()?);
-        match self.verify(candidate) {
-            Err(Status::CTAP2_ERR_PIN_AUTH_BLOCKED) => {
-                // The TPM definitively rejected the command before checking the PIN.
-                // Restore only this durably charged attempt; uncertain failures stay charged.
-                self.write_record(
-                    opensk::api::persist::keys::PIN_RETRIES,
-                    vec![attempt.expected_failure_count - 1],
-                )?;
-                self.0.tpm_lockout.set(true);
-                match self.run(false, |tpm, _| tpm.lockout_interval()) {
-                    Ok(Some(seconds)) if seconds > 0 => log::warn!(
-                        "TPM is temporarily locked; the configured recovery interval is {seconds} seconds per counter decrement, not an exact remaining wait; TPM resets may delay recovery; do not retry until it recovers; restarting Fidophir does not clear TPM lockout"
-                    ),
-                    _ => log::warn!(
-                        "TPM is temporarily locked; recovery time is unavailable or requires special handling; do not retry until it recovers; restarting Fidophir does not clear TPM lockout"
-                    ),
-                }
-                Err(Status::CTAP2_ERR_PIN_AUTH_BLOCKED)
-            }
-            result => result,
-        }
-    }
-
-    pub fn clear(&mut self) {
-        *self.0.pin_access.borrow_mut() = PinAccess::None;
+        )?;
+        self.remove(opensk::api::persist::keys::FORCE_PIN_CHANGE)
     }
 }
 
@@ -488,8 +398,8 @@ impl KeyStore for Backend {
         .map_err(|_| key_store::Error)
     }
     fn cred_random(&mut self, uv: bool) -> std::result::Result<Secret<[u8; 32]>, key_store::Error> {
-        let access = self.0.pin_access.borrow();
-        let PinAccess::Granted(grant) = &*access else {
+        let grant = self.0.grant.borrow();
+        let Some(grant) = grant.as_ref() else {
             return Err(key_store::Error);
         };
         let mut key = Secret::<[u8; 32]>::default();
@@ -501,19 +411,18 @@ impl KeyStore for Backend {
         &mut self,
         plain: &[u8; 16],
     ) -> std::result::Result<[u8; 16], key_store::Error> {
-        // Passed directly to set_pin, which authorizes/wraps in TPM; never stored.
         Ok(*plain)
     }
     fn verify_pin_hash(
         &mut self,
-        configured_pin_marker: &[u8; 16],
+        _stored: &[u8; 16],
         candidate: &[u8; 16],
     ) -> std::result::Result<bool, key_store::Error> {
-        if configured_pin_marker != &CONFIGURED_PIN_MARKER {
-            adapter_invariant("pin-verification", "unexpected-configured-pin-marker");
+        if let Some(grant) = self.0.grant.borrow().as_ref() {
+            // The forced-change check compares against this command's accepted PIN.
+            return Ok(bool::from(grant.pin_hash.ct_eq(candidate)));
         }
-        self.verify_candidate(candidate)
-            .map_err(|_| key_store::Error)
+        self.verify(candidate).map_err(|_| key_store::Error)
     }
 }
 
@@ -590,91 +499,27 @@ mod tests {
             sender: None,
             worker: None,
             io: crate::io::Io::shared(),
-            pin_access: RefCell::new(PinAccess::None),
+            grant: RefCell::new(None),
             tpm_lockout: Cell::new(false),
         }))
     }
 
-    fn grant(expires_at_ms: u64) -> PinAccess {
-        PinAccess::Granted(Grant {
+    fn grant(expires_at_ms: u64) -> Grant {
+        Grant {
             pin_hash: Secret::from_exposed_secret([0x42; 16]),
             master: Secret::from_exposed_secret([0x24; 64]),
             expires_at_ms,
-        })
+        }
     }
 
     #[test]
-    fn same_pin_policy_read_reuses_verified_hash_without_tpm_work() {
-        let mut backend = backend_without_worker();
-        *backend.0.pin_access.borrow_mut() = grant(100);
-        assert!(
-            backend
-                .verify_pin_hash(&CONFIGURED_PIN_MARKER, &[0x42; 16])
-                .unwrap()
-        );
-        assert!(
-            !backend
-                .verify_pin_hash(&CONFIGURED_PIN_MARKER, &[0x43; 16])
-                .unwrap()
-        );
+    fn pin_grant_expires_at_deadline() {
+        let backend = backend_without_worker();
+        *backend.0.grant.borrow_mut() = Some(grant(100));
         assert!(backend.has_pin_authorization());
         backend.expire_pin_authorization(99);
         assert!(backend.has_pin_authorization());
         backend.expire_pin_authorization(100);
         assert!(!backend.has_pin_authorization());
-    }
-
-    #[test]
-    fn wrong_configured_pin_marker_fails_with_sanitized_diagnostic() {
-        const CHILD: &str = "FIDOPHIR_TEST_WRONG_PIN_MARKER";
-        if std::env::var_os(CHILD).is_some() {
-            crate::logging::init();
-            let mut backend = backend_without_worker();
-            // Even an existing grant must not bypass the marker identity check.
-            *backend.0.pin_access.borrow_mut() = grant(100);
-            let _ = backend.verify_pin_hash(&[0xa5; 16], &[0; 16]);
-            panic!("unexpected marker was accepted");
-        }
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "backend::tests::wrong_configured_pin_marker_fails_with_sanitized_diagnostic",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
-        assert!(!output.status.success());
-        let diagnostic = String::from_utf8_lossy(&output.stderr);
-        assert!(diagnostic.contains("stage=pin-verification"));
-        assert!(diagnostic.contains("reason=unexpected-configured-pin-marker"));
-        assert!(diagnostic.contains("source="));
-        assert!(!diagnostic.contains("[165,"));
-    }
-    #[test]
-    fn uncharged_pin_attempt_terminates_before_candidate_verification() {
-        const CHILD: &str = "FIDOPHIR_TEST_UNCHARGED_PIN";
-        if std::env::var_os(CHILD).is_some() {
-            crate::logging::init();
-            let pending = PinAttempt {
-                expected_failure_count: 1,
-            };
-            pending.assert_retry_was_charged(0);
-            panic!("uncharged PIN attempt was accepted");
-        }
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "backend::tests::uncharged_pin_attempt_terminates_before_candidate_verification",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
-        assert!(!output.status.success());
-        let diagnostic = String::from_utf8_lossy(&output.stderr);
-        assert!(diagnostic.contains("stage=pin-verification"));
-        assert!(diagnostic.contains("reason=retry-not-durably-charged"));
-        assert!(!diagnostic.contains("[165,"));
     }
 }

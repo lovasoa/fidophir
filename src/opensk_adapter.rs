@@ -1,44 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Connects upstream OpenSK to Fidophir's TPM and PIN checks.
+//! Connects OpenSK's CTAP implementation to the TPM backend.
 //!
-//! Fidophir presents a virtual security key to the browser. OpenSK implements
-//! CTAP, the protocol the browser uses to talk to that key. Fidophir uses the
-//! computer's Trusted Platform Module (TPM), a security component, to protect the
-//! passkey keys and check PINs. This module connects those two pieces.
+//! OpenSK handles PIN policy, encrypted requests, token permissions and retries.
+//! `Backend` verifies candidates and stores PINs through the KeyStore API.
+//! Authorization is cleared before PIN attempts, after PIN storage, and on errors.
 //!
-//! # Compatibility and security contract
+//! Every protected command also needs Fidophir's short-lived TPM grant, including
+//! metadata operations that never touch the TPM. Clearing that grant cannot
+//! revoke OpenSK's token, so this check must cover all protected commands.
+//! A silent credential lookup with no match preserves the grant for registration.
 //!
-//! These details depend on the OpenSK commit locked in Cargo.lock:
-//! - `ctap/client_pin.rs::verify_pin_hash_enc` decrypts the PIN candidate and
-//!   deducts a retry before calling `KeyStore::verify_pin_hash`. Fidophir checks
-//!   the configured-PIN marker and durable retry count, then asks the TPM to
-//!   verify the candidate. OpenSK handles mismatches and resets retries on success.
-//! - During a forced PIN change, `check_and_store_new_pin` calls verification
-//!   again to reject reuse. Fidophir compares against this command's accepted
-//!   candidate without another TPM attempt.
-//! - After a successful PIN check, OpenSK issues a token for later commands and
-//!   Fidophir keeps temporary TPM authorization, called a grant. Completion
-//!   checks that the grant exists, or that PIN storage happened for SetPIN or
-//!   ChangePIN. This catches success paths that skip the expected calls.
-//! - `api/crypto/ec_signing.rs`: wrapped hardware keys are supported, but key
-//!   generation/signing receive no `Env`. A scoped backend selects the current
-//!   Fidophir instance; hardware failures return an error to OpenSK.
-//!
-//! All requests must pass through this module. Clearing our grant cannot revoke
-//! OpenSK's token, so *every* protected command also needs the grant, including
-//! metadata reads and deletes. OpenSK still checks message authentication codes
-//! (MACs), permissions, the website a token is bound to, and command order. Our
-//! grant expires at most 30 seconds after verification starts, independently of
-//! the token's lifetime.
-//!
-//! When updating OpenSK, review these call sites and run the simulator contract
-//! tests. Runtime checks enforce call order and successful completion; tests
-//! also exercise rejection, permissions and expiry across whole requests.
-//! Generic KeyStore errors deliberately hide the precise TPM status. They must
-//! never become wrong-PIN success or a usable grant. Unexpected adapter states
-//! terminate with diagnostics that contain no secrets; restart clears temporary
-//! authorization and may interrupt the browser request. Cancellation returns a
-//! normal CTAP error. There is no software signing fallback.
+//! Crypto methods without an `Env` parameter use `scope` to select the current
+//! backend. The request boundary owns this scope and prevents nested dispatch.
 pub(crate) mod scope;
 
 use crate::{env::LinuxEnv, io::boot_ms};
@@ -109,9 +82,9 @@ impl Authenticator {
                 matches!(command, Command::AuthenticatorGetAssertion(parameters) if !parameters.options.up)
             });
             let prepared = command.and_then(|command| prepare_command(env, &command, channel));
-            let mut response = match &prepared {
-                Ok(_) => self.state.process_command(env, bytes, channel),
-                Err(status) => vec![*status as u8],
+            let mut response = match prepared {
+                Ok(()) => self.state.process_command(env, bytes, channel),
+                Err(status) => vec![status as u8],
             };
             if env.backend.take_tpm_lockout() {
                 response = vec![Status::CTAP2_ERR_PIN_AUTH_BLOCKED as u8];
@@ -119,7 +92,7 @@ impl Authenticator {
             if env.command_was_cancelled() {
                 response = vec![Status::CTAP2_ERR_KEEPALIVE_CANCEL as u8];
             }
-            finish_command(env, prepared.ok(), &response, silent_lookup);
+            finish_command(env, &response, silent_lookup);
             interaction.finish(
                 crate::logging::ResponseStatus::from_response(&response),
                 quiet,
@@ -129,28 +102,14 @@ impl Authenticator {
     }
 }
 
-/// Postconditions and authorization cleanup for successful commands.
-/// Keep this local to the synchronous request; it is not another token state.
-#[derive(Clone, Copy)]
-enum AuthorizationOnSuccess {
-    Preserve,
-    RetainNewPinGrant,
-    RequirePinStored,
-}
-
-fn prepare_command(
-    env: &mut LinuxEnv,
-    command: &Command,
-    channel: Channel,
-) -> CtapResult<AuthorizationOnSuccess> {
-    use AuthorizationOnSuccess::*;
+fn prepare_command(env: &mut LinuxEnv, command: &Command, channel: Channel) -> CtapResult<()> {
     use ClientPinSubCommand::*;
     match command {
         Command::AuthenticatorGetInfo | Command::AuthenticatorSelection => {
             if matches!(command, Command::AuthenticatorSelection) {
                 env.set_approval_context(Some("use your security key"), None);
             }
-            Ok(Preserve)
+            Ok(())
         }
         Command::AuthenticatorClientPin(parameters) => match parameters.sub_command {
             SetPin => {
@@ -161,25 +120,22 @@ fn prepare_command(
                     // public helper, including keepalives and cancellation.
                     check_user_presence(env, channel)?;
                 }
-                Ok(RequirePinStored)
+                Ok(())
             }
             ChangePin | GetPinToken | GetPinUvAuthTokenUsingPinWithPermissions => {
                 // Never let an earlier grant stand in for this candidate.
                 env.backend.clear();
-                env.backend.begin_pin_verification()?;
                 if parameters.sub_command == ChangePin {
                     env.set_approval_context(Some("change your security key PIN"), None);
-                    Ok(RequirePinStored)
-                } else {
-                    Ok(RetainNewPinGrant)
                 }
+                Ok(())
             }
             // Upstream rejects unsupported built-in UV; harmless queries need
             // no lease. An error still clears authorization at completion.
             GetPinRetries
             | GetKeyAgreement
             | GetUvRetries
-            | GetPinUvAuthTokenUsingUvWithPermissions => Ok(Preserve),
+            | GetPinUvAuthTokenUsingUvWithPermissions => Ok(()),
         },
         Command::AuthenticatorReset => Err(Status::CTAP2_ERR_NOT_ALLOWED),
         protected => {
@@ -197,44 +153,19 @@ fn prepare_command(
                 }
                 _ => (),
             }
-            Ok(Preserve)
+            Ok(())
         }
     }
 }
 
-fn finish_command(
-    env: &mut LinuxEnv,
-    prepared: Option<AuthorizationOnSuccess>,
-    response: &[u8],
-    silent_lookup: bool,
-) {
-    // Browsers probe excluded credentials silently before creating one using
-    // the same PIN token. A miss is an expected result, not a failed grant.
-    if silent_lookup
-        && prepared.is_some()
-        && response.first() == Some(&(Status::CTAP2_ERR_NO_CREDENTIALS as u8))
+fn finish_command(env: &mut LinuxEnv, response: &[u8], silent_lookup: bool) {
+    // Browsers reuse the PIN token after a silent excluded-credential miss.
+    let status = response.first().copied();
+    if status != Some(Status::CTAP2_OK as u8)
+        && !(silent_lookup && status == Some(Status::CTAP2_ERR_NO_CREDENTIALS as u8))
     {
-        env.backend.expire_pin_authorization(boot_ms());
-        return;
-    }
-    if response.first() != Some(&(Status::CTAP2_OK as u8)) {
         env.backend.clear();
-        return;
     }
-    match prepared {
-        Some(AuthorizationOnSuccess::RetainNewPinGrant) => {
-            // A TPM grant is provisional inside ClientPIN. Only successful
-            // token issuance permits the following command to use it.
-            env.backend.assert_pin_was_verified();
-        }
-        Some(AuthorizationOnSuccess::Preserve) => (),
-        Some(AuthorizationOnSuccess::RequirePinStored) => {
-            env.backend.assert_pin_was_stored();
-            env.backend.clear();
-        }
-        None => env.backend.clear(),
-    }
-    // Match OpenSK's command-entry timeout semantics: an admitted command may
-    // finish a long desktop prompt, then its expired authorization is erased.
+    // An admitted command may finish a long prompt before its grant is erased.
     env.backend.expire_pin_authorization(boot_ms());
 }
