@@ -1,68 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Connects a fixed version of unmodified OpenSK to Fidophir's PIN checks.
+//! Connects upstream OpenSK to Fidophir's TPM and PIN checks.
 //!
 //! Fidophir presents a virtual security key to the browser. OpenSK implements
 //! CTAP, the protocol the browser uses to talk to that key. Fidophir uses the
 //! computer's Trusted Platform Module (TPM), a security component, to protect the
 //! passkey keys and check PINs. This module connects those two pieces.
 //!
-//! # The PIN verification trick
-//!
-//! OpenSK normally checks a PIN by comparing two values: a value derived from
-//! the PIN just entered, and an expected value recovered from storage. It asks
-//! its host to provide the expected value. Fidophir instead wants the TPM to
-//! decide whether the entered PIN is correct, without storing an expected PIN
-//! value in software. It adapts OpenSK's request as follows:
-//!
-//! 1. The browser applies SHA-256, a repeatable one-way calculation, to the
-//!    entered PIN and takes the first 16 bytes. We call these bytes the *PIN
-//!    candidate*. The browser derives an encryption key from a secret it shares
-//!    with OpenSK, encrypts the PIN candidate and sends the encrypted value to
-//!    the virtual security key. Fidophir keeps a copy of that encrypted value
-//!    and passes the request to OpenSK.
-//! 2. OpenSK derives the same encryption key independently. It asks Fidophir to
-//!    perform HKDF, the standard calculation that derives the key from the
-//!    shared secret. Fidophir returns the unchanged key to OpenSK and keeps a
-//!    temporary copy for the pending PIN request.
-//! 3. OpenSK asks Fidophir for the stored PIN value. Because Fidophir has no
-//!    such value, it returns a fixed placeholder indicating that a PIN is set.
-//!    OpenSK then asks Fidophir to decrypt that placeholder, expecting the
-//!    result to be the value against which it should check the PIN candidate.
-//! 4. Fidophir uses its copy of the encryption key to decrypt its copy of the
-//!    browser's encrypted value, recovering the PIN candidate. It presents the
-//!    PIN candidate to the TPM as the authorization needed to use a protected
-//!    object. If the TPM accepts, Fidophir returns the PIN candidate to OpenSK.
-//!    If the TPM rejects it, Fidophir flips one bit of the PIN candidate and
-//!    returns the altered value instead.
-//! 5. OpenSK decrypts the browser's encrypted value itself. It compares the
-//!    resulting PIN candidate with the value Fidophir returned in step 4. The
-//!    values match when the TPM accepted the PIN and differ when it rejected
-//!    it, so OpenSK follows its normal success or wrong-PIN path.
-//!
-//! Flipping a bit guarantees a mismatch even if an attacker chooses the PIN
-//! candidate. Valid requests with incorrect PINs reach the TPM's protection
-//! against repeated guesses. SHA-256 alone does not make a short PIN hard to
-//! guess.
-//!
 //! # Compatibility and security contract
 //!
-//! These details depend on the OpenSK version in Cargo.toml:
-//! - `ctap/pin_protocol.rs`: ClientPIN v2 derives its key with zero-salt HKDF
-//!   and the label `CTAP2 AES key`; the derived key must never be modified.
-//! - `ctap/client_pin.rs::verify_pin_hash_enc` deducts a retry before calling
-//!   `decrypt_pin_hash`, then compares values without revealing how many bytes
-//!   matched. It resets retries on success. Fidophir checks the placeholder and
-//!   verifies that the retry deduction was saved before it asks the TPM.
-//! - `check_and_store_new_pin` may read the accepted candidate again to check
-//!   whether a replacement PIN is the same as the old one.
+//! These details depend on the OpenSK commit locked in Cargo.lock:
+//! - `ctap/client_pin.rs::verify_pin_hash_enc` decrypts the PIN candidate and
+//!   deducts a retry before calling `KeyStore::verify_pin_hash`. Fidophir checks
+//!   the configured-PIN marker and durable retry count, then asks the TPM to
+//!   verify the candidate. OpenSK handles mismatches and resets retries on success.
+//! - During a forced PIN change, `check_and_store_new_pin` calls verification
+//!   again to reject reuse. Fidophir compares against this command's accepted
+//!   candidate without another TPM attempt.
 //! - After a successful PIN check, OpenSK issues a token for later commands and
 //!   Fidophir keeps temporary TPM authorization, called a grant. Completion
 //!   checks that the grant exists, or that PIN storage happened for SetPIN or
 //!   ChangePIN. This catches success paths that skip the expected calls.
 //! - `api/crypto/ec_signing.rs`: wrapped hardware keys are supported, but key
-//!   generation/signing cannot return errors or receive an `Env`. A scoped
-//!   backend selects the current Fidophir instance; hardware failures in those
-//!   methods terminate the process safely.
+//!   generation/signing receive no `Env`. A scoped backend selects the current
+//!   Fidophir instance; hardware failures return an error to OpenSK.
 //!
 //! All requests must pass through this module. Clearing our grant cannot revoke
 //! OpenSK's token, so *every* protected command also needs the grant, including
@@ -77,12 +37,9 @@
 //! Generic KeyStore errors deliberately hide the precise TPM status. They must
 //! never become wrong-PIN success or a usable grant. Unexpected adapter states
 //! terminate with diagnostics that contain no secrets; restart clears temporary
-//! authorization and may interrupt the browser request. Cancellation inside a
-//! key operation that cannot return errors also stops the process; earlier
-//! cancellation returns a normal CTAP error. There is no software signing
-//! fallback.
+//! authorization and may interrupt the browser request. Cancellation returns a
+//! normal CTAP error. There is no software signing fallback.
 pub(crate) mod scope;
-pub use scope::PinProtocolHkdf256;
 
 use crate::{env::LinuxEnv, io::boot_ms};
 use opensk::{
@@ -209,9 +166,7 @@ fn prepare_command(
             ChangePin | GetPinToken | GetPinUvAuthTokenUsingPinWithPermissions => {
                 // Never let an earlier grant stand in for this candidate.
                 env.backend.clear();
-                if let Some(encrypted_hash) = &parameters.pin_hash_enc {
-                    env.backend.begin_pin_verification(encrypted_hash.clone())?;
-                }
+                env.backend.begin_pin_verification()?;
                 if parameters.sub_command == ChangePin {
                     env.set_approval_context(Some("change your security key PIN"), None);
                     Ok(RequirePinStored)

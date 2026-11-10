@@ -4,7 +4,6 @@ use crate::{
     approval::Approval,
     backend::{Backend, TpmEcdsa},
     io::{SharedIo, boot_ms, dispatch_desktop},
-    opensk_adapter::PinProtocolHkdf256,
 };
 use opensk::{
     api::{
@@ -12,7 +11,6 @@ use opensk::{
         connection::{HidConnection, RecvStatus, UsbEndpoint},
         crypto::{Crypto, rust_crypto::*},
         customization::{CustomizationImpl, DEFAULT_CUSTOMIZATION},
-        rng::rand_core::{CryptoRng, Error as RngError, RngCore},
     },
     ctap::{
         data_formats::CredentialProtectionPolicy,
@@ -21,29 +19,26 @@ use opensk::{
     env::Env,
 };
 use rand::{
-    Rng, SeedableRng,
+    SeedableRng, TryCryptoRng, TryRng,
     rngs::{StdRng, SysRng},
 };
 use std::{path::PathBuf, time::Duration};
 
-// OpenSK 0.1.0 uses rand_core 0.6. Adapt its traits to our OS-seeded generator.
+// OS-seeded random generator implementing OpenSK's marker trait.
 pub struct HostRng(StdRng);
-impl RngCore for HostRng {
-    fn next_u32(&mut self) -> u32 {
-        self.0.next_u32()
+impl TryRng for HostRng {
+    type Error = std::convert::Infallible;
+    fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
+        self.0.try_next_u32()
     }
-    fn next_u64(&mut self) -> u64 {
-        self.0.next_u64()
+    fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
+        self.0.try_next_u64()
     }
-    fn fill_bytes(&mut self, out: &mut [u8]) {
-        self.0.fill_bytes(out);
-    }
-    fn try_fill_bytes(&mut self, out: &mut [u8]) -> std::result::Result<(), RngError> {
-        self.fill_bytes(out);
-        Ok(())
+    fn try_fill_bytes(&mut self, out: &mut [u8]) -> std::result::Result<(), Self::Error> {
+        self.0.try_fill_bytes(out)
     }
 }
-impl CryptoRng for HostRng {}
+impl TryCryptoRng for HostRng {}
 impl opensk::api::rng::Rng for HostRng {}
 
 pub struct HostCrypto;
@@ -53,7 +48,7 @@ impl Crypto for HostCrypto {
     type Ecdsa = TpmEcdsa;
     type Sha256 = SoftwareSha256;
     type Hmac256 = SoftwareHmac256;
-    type Hkdf256 = PinProtocolHkdf256;
+    type Hkdf256 = SoftwareHkdf256;
 }
 
 pub struct HostClock;

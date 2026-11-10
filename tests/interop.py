@@ -25,10 +25,10 @@ from fido2 import cbor
 
 
 class Pipe(CtapDevice):
-    def __init__(self, binary, root, tcti, decision="allow", capture_stderr=False, stderr_file=None):
+    def __init__(self, binary, root, tcti, decision="allow", stderr_file=None):
         self.proc = subprocess.Popen([str(binary), str(root), tcti, decision],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                     stderr=stderr_file if stderr_file is not None else (subprocess.PIPE if capture_stderr else None))
+                                     stderr=stderr_file)
 
     @property
     def capabilities(self):
@@ -61,21 +61,6 @@ class Pipe(CtapDevice):
             self.proc.stdin.close()
         assert self.proc.wait(timeout=15) == expected
         self.proc.stdout.close()
-
-
-def expect_fail_stop(pipe, operation):
-    """An infallible OpenSK crypto callback must stop rather than fabricate output."""
-    try:
-        operation()
-    except RuntimeError as error:
-        assert "Rust test bridge exited" in str(error), error
-    else:
-        raise AssertionError("hardware failure emitted a protocol response instead of stopping")
-    pipe.close(expected=1)
-    diagnostics = pipe.proc.stderr.read().decode()
-    pipe.proc.stderr.close()
-    assert "fatal" in diagnostics and "sign" in diagnostics, diagnostics
-    return diagnostics
 
 
 def expect(code, fn):
@@ -303,7 +288,7 @@ def main():
                 sign(ctap,pin,first)
                 sign(ctap,pin,second)
                 # Only a genuine sixteen-byte candidate may reach the TPM. The
-                # adapter must leave OpenSK's ordinary mismatch path intact for
+                # verification callback must leave OpenSK's mismatch path intact for
                 # invalid ciphertext and valid ciphertext of the wrong length.
                 hardware_attempts = tpm_dictionary_attack_counter(tcti)
                 for shape in ("empty", "partial-block", "long-plaintext"):
@@ -318,7 +303,7 @@ def main():
                         permissions=ClientPin.PERMISSION.GET_ASSERTION,
                         permissions_rpid="example.test"))
                     assert client.get_pin_retries()[0] == retries - 1
-                    sign(ctap, pin, first)  # Fresh request cannot reuse captured key/candidate.
+                    sign(ctap, pin, first)  # Fresh request must verify its own candidate.
                 assert tpm_dictionary_attack_counter(tcti) == hardware_attempts
                 print("PASS: malformed PIN ciphertext consumes retries and cannot poison the next request", flush=True)
                 if args.capacity:
@@ -485,31 +470,17 @@ def main():
                 sign(ctap, new_pin, first)
                 print("PASS: admin deletion survives restart; directory restore works", flush=True)
 
-                # OpenSK's signing interface cannot report hardware failure.
-                # A structurally valid but damaged TPM key must therefore stop
-                # the process, with no fabricated response, and recover on restart.
-                pipe.close(); pipe = None
-                pipe = Pipe(args.binary, state, tcti, capture_stderr=True)
-                ctap = Ctap2(pipe)
+                # A damaged TPM key returns an error without restarting the daemon.
                 record_file = directory / "tpm-signing-blob.bin"
                 original = record_file.read_bytes()
                 wrapped = cbor.decode(original)
                 damaged = bytearray(wrapped[2]); damaged[-1] ^= 1; wrapped[2] = bytes(damaged)
                 record_file.write_bytes(cbor.encode(wrapped))
-                diagnostics = expect_fail_stop(pipe, lambda: sign(ctap, new_pin, first))
-                pipe = None
-                assert new_pin not in diagnostics and "example.test" not in diagnostics
-                # This private simulator uses raw TCP, without the kernel TPM
-                # resource manager used by production /dev/tpmrm0. Emulate its
-                # close-time object cleanup after the intentional abrupt exit.
-                # Never do this against a physical/shared TPM.
-                subprocess.run(["tpm2_flushcontext", "-T", tcti, "-t"], check=True)
-                pipe = Pipe(args.binary, state, tcti)
-                ctap = Ctap2(pipe)
+                expect(0xF2, lambda: sign(ctap, new_pin, first))
                 sign(ctap, new_pin, second)
                 record_file.write_bytes(original)
                 sign(ctap, new_pin, first)
-                print("PASS: signing hardware failure stops safely; restart restores healthy and repaired credentials", flush=True)
+                print("PASS: signing hardware failure returns an error; healthy and repaired credentials work without restart", flush=True)
 
                 # Simulate missing shared state while running. Never silently
                 # provision a new parent that would orphan the remaining keys.

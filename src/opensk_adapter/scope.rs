@@ -4,7 +4,6 @@
 //! This scope confers no authorization: `Backend` still checks its own PIN access.
 //! It only identifies the instance executing this synchronous OpenSK command.
 use crate::backend::{Backend, adapter_invariant};
-use opensk::api::crypto::{hkdf256::Hkdf256, rust_crypto::SoftwareHkdf256};
 use std::cell::RefCell;
 
 thread_local! {
@@ -39,17 +38,4 @@ pub(crate) fn current_backend() -> Backend {
             .clone()
             .unwrap_or_else(|| adapter_invariant("dispatch-scope", "missing-backend"))
     })
-}
-
-/// Transparent HKDF with request-local observation of the genuine ClientPIN key.
-pub struct PinProtocolHkdf256;
-impl Hkdf256 for PinProtocolHkdf256 {
-    fn hkdf_256(ikm: &[u8], salt: &[u8; 32], info: &[u8], output: &mut [u8; 32]) {
-        SoftwareHkdf256::hkdf_256(ikm, salt, info, output);
-        // Preserve HKDF exactly. This pinned label identifies the v2 PIN AES key;
-        // Backend captures it only while the current PIN request awaits a key.
-        if salt == &[0; 32] && info == b"CTAP2 AES key" {
-            current_backend().observe_pin_aes_key(output);
-        }
-    }
 }
