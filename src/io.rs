@@ -9,10 +9,31 @@ use uhid_virt::{
 
 pub type SharedIo = Rc<RefCell<Io>>;
 
-const DESCRIPTOR: &[u8] = &[
-    0x06, 0xd0, 0xf1, 0x09, 0x01, 0xa1, 0x01, 0x09, 0x20, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08,
-    0x95, 0x40, 0x81, 0x02, 0x09, 0x21, 0x15, 0x00, 0x26, 0xff, 0x00, 0x75, 0x08, 0x95, 0x40, 0x91,
-    0x02, 0xc0,
+// HID encodes multi-byte item values in little-endian order.
+const FIDO_USAGE_PAGE: [u8; 2] = 0xF1D0u16.to_le_bytes();
+
+/// Identifies the virtual device as a FIDO authenticator with 64-byte input and
+/// output reports. No Report ID item is present, so reports are unnumbered.
+/// See §3.2, "HID report descriptor and device discovery":
+/// https://fidoalliance.org/specs/u2f-specs-master/fido-u2f-hid-protocol.html
+#[rustfmt::skip]
+const FIDO_HID_REPORT_DESCRIPTOR: &[u8] = &[
+    0x06, FIDO_USAGE_PAGE[0], FIDO_USAGE_PAGE[1], // Usage Page (FIDO Alliance, 0xF1D0)
+    0x09, 0x01,       // Usage (U2F Authenticator Device)
+    0xa1, 0x01,       // Collection (Application)
+    0x09, 0x20,       //   Usage (Input Report Data: device → host)
+    0x15, 0x00,       //   Logical Minimum (0)
+    0x26, 0xff, 0x00, //   Logical Maximum (255)
+    0x75, 0x08,       //   Report Size (8 bits)
+    0x95, 0x40,       //   Report Count (64 bytes)
+    0x81, 0x02,       //   Input (Data, Variable, Absolute)
+    0x09, 0x21,       //   Usage (Output Report Data: host → device)
+    0x15, 0x00,       //   Logical Minimum (0)
+    0x26, 0xff, 0x00, //   Logical Maximum (255)
+    0x75, 0x08,       //   Report Size (8 bits)
+    0x95, 0x40,       //   Report Count (64 bytes)
+    0x91, 0x02,       //   Output (Data, Variable, Absolute)
+    0xc0,             // End Collection
 ];
 
 /// A report transport. Framing and command lifecycle belong to `Io`.
@@ -103,7 +124,7 @@ impl Io {
             product: 1,
             version: 1,
             country: 0,
-            rd_data: DESCRIPTOR.to_vec(),
+            rd_data: FIDO_HID_REPORT_DESCRIPTOR.to_vec(),
         })?));
         Ok(())
     }
