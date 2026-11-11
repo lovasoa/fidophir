@@ -9,16 +9,13 @@ use uhid_virt::{
 
 pub type SharedIo = Rc<RefCell<Io>>;
 
-// HID encodes multi-byte item values in little-endian order.
-const FIDO_USAGE_PAGE: [u8; 2] = 0xF1D0u16.to_le_bytes();
-
 /// Identifies the virtual device as a FIDO authenticator with 64-byte input and
 /// output reports. No Report ID item is present, so reports are unnumbered.
 /// See §3.2, "HID report descriptor and device discovery":
 /// https://fidoalliance.org/specs/u2f-specs-master/fido-u2f-hid-protocol.html
 #[rustfmt::skip]
 const FIDO_HID_REPORT_DESCRIPTOR: &[u8] = &[
-    0x06, FIDO_USAGE_PAGE[0], FIDO_USAGE_PAGE[1], // Usage Page (FIDO Alliance, 0xF1D0)
+    0x06, 0xF1, 0xD0, // Usage Page (FIDO Alliance, 0xF1D0)
     0x09, 0x01,       // Usage (U2F Authenticator Device)
     0xa1, 0x01,       // Collection (Application)
     0x09, 0x20,       //   Usage (Input Report Data: device → host)
