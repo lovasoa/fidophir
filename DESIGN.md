@@ -4,7 +4,10 @@ Fidophir is an experimental Linux host for the [OpenSK](https://github.com/googl
 
 ## Components
 
-- `src/env.rs` and `src/main.rs` connect OpenSK to the Linux host and run its protocol loop.
+- `src/runtime.rs` selects and constructs the host services. This is the only module with test feature selection; the integration binary selects simulator transport and fixed or desktop approval here.
+- `src/core.rs`, `src/backend.rs`, `src/tpm.rs`, and `src/state/` expose host errors, authorization, TPM operations and credential records without OpenSK imports. `HostServices` supplies cancellation and event pumping; `CredentialCodec` supplies credential serialization.
+- `src/opensk_adapter/env.rs` implements OpenSK's environment using injected services. `storage.rs` implements `Persist` and `KeyStore`, translates errors, including TPM lockout for OpenSK's retry refund. `credential.rs` converts protocol credentials to host records. `crypto.rs` implements static signing traits through `scope.rs`.
+- `src/main.rs` runs the production protocol loop; `src/bin/integration.rs` supplies the integration transport.
 - `src/io.rs` exposes a virtual HID device. `src/backend.rs` runs blocking storage and TPM work without stopping protocol keepalives.
 - `src/tpm.rs` creates and uses TPM keys. `src/state.rs` stores records on disk.
 - `src/approval.rs` asks login1 and polkit for a fresh approval in the instance user's local, active, unlocked graphical session.
@@ -26,6 +29,10 @@ The design trusts root, the kernel, the service account, browser, desktop agent 
 An old copy of the TPM parent can still be used with its old PIN on the same TPM after a PIN change. Deleting local state does not revoke a copied credential. Revoke credentials at the website when necessary. Losing either the TPM or state loses access to these passkeys. TPM lockout is shared with other applications; Fidophir does not clear or reconfigure it.
 
 ## OpenSK integration
+
+Read the command path from `main.rs` → `runtime::system` → `Authenticator::process_hid_packet` → `process_cbor`. Command preparation and completion enforce host authorization around OpenSK dispatch. OpenSK calls the injected environment's storage, approval and crypto adapters; those call the core. Only static crypto methods need the dispatch scope.
+
+`integration-tests` enables the integration executable and OpenSK's standard-library support. `systemd-tests` changes the centrally selected system TPM transport for disposable package tests. Neither feature changes backend, storage, approval or packet-processing logic. `PacketTransport` supports UHID and in-memory reports through the same interface; `LinuxEnv::build` accepts already constructed services.
 
 OpenSK owns PIN policy, request decryption, token authentication and retry accounting. Fidophir verifies candidates and stores PINs using the public `KeyStore` interface. The backend holds no persistent software PIN verifier. OpenSK handles forced-change reuse comparisons without another backend call. Backend errors are distinct from incorrect PINs.
 

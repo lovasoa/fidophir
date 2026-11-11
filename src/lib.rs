@@ -3,7 +3,9 @@
 extern crate alloc;
 pub mod approval;
 pub mod backend;
-pub mod env;
+pub mod core;
+pub mod runtime;
+pub use opensk_adapter::env;
 pub mod io;
 pub mod logging;
 pub mod opensk_adapter;

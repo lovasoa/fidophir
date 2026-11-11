@@ -59,8 +59,8 @@ fn populate(store: &Store) {
 #[test]
 fn readable_roundtrip_atomic_replace_delete_reopen_and_lock() {
     let root = Directory::new();
-    let store = Store::open(&root.0).unwrap();
-    assert!(Store::open(&root.0).is_err());
+    let store = Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).unwrap();
+    assert!(Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).is_err());
     populate(&store);
     let meta = root.path("v2/credentials/00000/metadata.ini");
     let text = fs::read_to_string(&meta).unwrap();
@@ -87,7 +87,7 @@ fn readable_roundtrip_atomic_replace_delete_reopen_and_lock() {
     .unwrap();
     assert_eq!(edited.user_name.as_deref(), Some("bob"));
     drop(store);
-    let store = Store::open(&root.0).unwrap();
+    let store = Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).unwrap();
     assert_eq!(store.free_credential_key().unwrap(), Some(1702));
     store.remove(1700).unwrap();
     store.remove(1700).unwrap();
@@ -98,7 +98,7 @@ fn readable_roundtrip_atomic_replace_delete_reopen_and_lock() {
 #[test]
 fn damaged_credentials_are_parked_without_overwriting_and_can_be_restored() {
     let root = Directory::new();
-    let store = Store::open(&root.0).unwrap();
+    let store = Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).unwrap();
     populate(&store);
     let slot = root.path("v2/credentials/00000");
     let original = fs::read(slot.join("metadata.ini")).unwrap();
@@ -120,14 +120,14 @@ fn damaged_credentials_are_parked_without_overwriting_and_can_be_restored() {
     fs::rename(&parked, &slot).unwrap();
     assert_eq!(store.read(1700).unwrap(), Some(record(1)));
     drop(store);
-    let store = Store::open(&root.0).unwrap();
+    let store = Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).unwrap();
     assert_eq!(store.read(1700).unwrap(), Some(record(1)));
 }
 
 #[test]
 fn filesystem_errors_do_not_park_credentials_and_parked_entries_protect_parent() {
     let root = Directory::new();
-    let store = Store::open(&root.0).unwrap();
+    let store = Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).unwrap();
     populate(&store);
     let slot = root.path("v2/credentials/00000");
     let file = slot.join("user-handle.bin");
@@ -149,7 +149,7 @@ fn filesystem_errors_do_not_park_credentials_and_parked_entries_protect_parent()
     );
     drop(store);
     assert!(
-        Store::open(&root.0)
+        Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec)
             .err()
             .unwrap()
             .to_string()
@@ -164,25 +164,25 @@ fn incomplete_initialization_can_be_reopened() {
         .mode(0o700)
         .create(root.path("v2"))
         .unwrap();
-    let store = Store::open(&root.0).unwrap();
+    let store = Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).unwrap();
     assert!(root.path("v2/credentials").is_dir());
     assert!(root.path("v2/authenticator").is_dir());
     populate(&store);
     drop(store);
-    let store = Store::open(&root.0).unwrap();
+    let store = Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).unwrap();
     assert_eq!(store.read(1700).unwrap(), Some(record(1)));
 }
 
 #[test]
 fn startup_parks_invalid_credentials_and_updates_old_recovery_instructions() {
     let root = Directory::new();
-    let store = Store::open(&root.0).unwrap();
+    let store = Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).unwrap();
     populate(&store);
     fs::write(root.path("v2/credentials/00000/metadata.ini"), b"[broken").unwrap();
     let readme = root.path("v2/README.txt");
     fs::write(&readme, "Local notes\nDamaged credentials are skipped, with the failing path reported in the journal.\nTheir slots stay reserved: new registrations never overwrite them. Restore the\nfiles with correct ownership/permissions, or remove the whole directory. No\ncredential cache needs rebuilding. Unrecognized filenames are ignored.\n").unwrap();
     drop(store);
-    let store = Store::open(&root.0).unwrap();
+    let store = Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).unwrap();
     assert!(root.path("v2/credentials/00000.damaged-1").is_dir());
     assert_eq!(store.free_credential_key().unwrap(), Some(1700));
     let text = fs::read_to_string(readme).unwrap();
@@ -193,7 +193,7 @@ fn startup_parks_invalid_credentials_and_updates_old_recovery_instructions() {
 #[test]
 fn capacity_and_interrupted_publication() {
     let root = Directory::new();
-    let store = Store::open(&root.0).unwrap();
+    let store = Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).unwrap();
     store.write(PARENT, &parent()).unwrap();
     // Empty/damaged directories reserve slots without doing 300 durable writes.
     for key in CREDENTIALS {
@@ -208,7 +208,7 @@ fn capacity_and_interrupted_publication() {
         .write_file(&pending.join("metadata.ini"), b"partial")
         .unwrap();
     drop(store);
-    let store = Store::open(&root.0).unwrap();
+    let store = Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).unwrap();
     assert!(!pending.exists());
     assert_eq!(store.read(1700).unwrap(), Some(record(1)));
     assert!(store.write(4096, b"invalid").is_err());
@@ -219,7 +219,7 @@ fn capacity_and_interrupted_publication() {
 #[test]
 fn non_discoverable_records_are_readable_bound_and_protect_the_parent() {
     let root = Directory::new();
-    let store = Store::open(&root.0).unwrap();
+    let store = Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).unwrap();
     store.write(PARENT, &parent()).unwrap();
     let source = opensk::api::key_store::CredentialSource {
         wrapped_private_key: sk_cbor::cbor_array![
@@ -233,7 +233,7 @@ fn non_discoverable_records_are_readable_bound_and_protect_the_parent() {
         cred_blob: Some(vec![7; 32]),
     };
     let id: [u8; 32] = store
-        .create_non_discoverable(source)
+        .create_non_discoverable(source.into())
         .unwrap()
         .try_into()
         .unwrap();
@@ -264,7 +264,7 @@ fn non_discoverable_records_are_readable_bound_and_protect_the_parent() {
             .all(|k| !CREDENTIALS.contains(k))
     );
     drop(store);
-    let store = Store::open(&root.0).unwrap();
+    let store = Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).unwrap();
     assert!(
         store
             .read_non_discoverable(&id, &[42; 32])
@@ -281,5 +281,5 @@ fn non_discoverable_records_are_readable_bound_and_protect_the_parent() {
     assert!(path.with_file_name("00000.damaged-1").is_dir());
     fs::remove_file(root.path("v2/authenticator/tpm-parent.bin")).unwrap();
     drop(store);
-    assert!(Store::open(&root.0).is_err());
+    assert!(Store::open(&root.0, &crate::opensk_adapter::credential::OpenSkCodec).is_err());
 }

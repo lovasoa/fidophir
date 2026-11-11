@@ -15,22 +15,50 @@ const DESCRIPTOR: &[u8] = &[
     0x02, 0xc0,
 ];
 
-#[derive(Default)]
+/// A report transport. Framing and command lifecycle belong to `Io`.
+pub trait PacketTransport {
+    fn send(&mut self, frame: &[u8; 64]) -> Result<()>;
+    fn receive(&mut self) -> Result<Option<[u8; 64]>>;
+}
+
+#[derive(Default, Clone)]
+pub struct MemoryTransport {
+    pub input: Rc<RefCell<std::collections::VecDeque<[u8; 64]>>>,
+    pub output: Rc<RefCell<Vec<[u8; 64]>>>,
+}
+impl PacketTransport for MemoryTransport {
+    fn send(&mut self, frame: &[u8; 64]) -> Result<()> {
+        self.output.borrow_mut().push(*frame);
+        Ok(())
+    }
+    fn receive(&mut self) -> Result<Option<[u8; 64]>> {
+        Ok(self.input.borrow_mut().pop_front())
+    }
+}
+
 pub struct Io {
-    device: Option<UHIDDevice<File>>,
+    transport: Box<dyn PacketTransport>,
     current: Option<[u8; 4]>,
     cancelled: bool,
     next_keepalive: u64,
-    #[cfg(any(test, feature = "integration-tests"))]
-    input: std::collections::VecDeque<[u8; 64]>,
-    #[cfg(test)]
-    output: Vec<[u8; 64]>,
+}
+impl Default for Io {
+    fn default() -> Self {
+        Self::with_transport(MemoryTransport::default())
+    }
 }
 
-pub fn boot_ms() -> u64 {
-    let t = nix::time::clock_gettime(nix::time::ClockId::CLOCK_BOOTTIME)
-        .expect("CLOCK_BOOTTIME unavailable");
-    (t.tv_sec() as u64).saturating_mul(1000) + t.tv_nsec() as u64 / 1_000_000
+struct UhidTransport(UHIDDevice<File>);
+
+pub use crate::core::boot_ms;
+impl crate::core::HostServices for RefCell<Io> {
+    fn cancelled(&self) -> bool {
+        self.borrow().cancelled()
+    }
+    fn service(&self) -> Result<()> {
+        dispatch_desktop();
+        self.borrow_mut().busy()
+    }
 }
 
 pub fn dispatch_desktop() {
@@ -57,8 +85,16 @@ impl Io {
         Rc::new(RefCell::new(Self::default()))
     }
 
+    pub fn with_transport(transport: impl PacketTransport + 'static) -> Self {
+        Self {
+            transport: Box::new(transport),
+            current: None,
+            cancelled: false,
+            next_keepalive: 0,
+        }
+    }
     pub fn publish(&mut self, uid: u32) -> Result<()> {
-        self.device = Some(UHIDDevice::create(CreateParams {
+        self.transport = Box::new(UhidTransport(UHIDDevice::create(CreateParams {
             name: "Fidophir Trusted Platform Module".into(),
             phys: "fidophir-v2".into(),
             uniq: uid.to_string(),
@@ -68,7 +104,7 @@ impl Io {
             version: 1,
             country: 0,
             rd_data: DESCRIPTOR.to_vec(),
-        })?);
+        })?));
         Ok(())
     }
 
@@ -85,26 +121,51 @@ impl Io {
     }
 
     pub fn send(&mut self, frame: &[u8; 64]) -> Result<()> {
-        #[cfg(test)]
-        {
-            self.output.push(*frame);
+        self.transport.send(frame)
+    }
+    pub fn receive(&mut self) -> Result<Option<[u8; 64]>> {
+        self.transport.receive()
+    }
+
+    /// Called only while the core is inside a blocking backend callback.
+    pub fn busy(&mut self) -> Result<()> {
+        let Some(cid) = self.current else {
+            return Ok(());
+        };
+        if let Some(packet) = self.receive()? {
+            let (received, event) = CtapHid::<crate::env::LinuxEnv>::process_single_packet(&packet);
+            if received != cid {
+                for packet in CtapHid::<crate::env::LinuxEnv>::busy_error(received) {
+                    self.send(&packet)?;
+                }
+            } else if matches!(event, ProcessedPacket::InitPacket {cmd, ..} if cmd == CtapHidCommand::Cancel as u8)
+            {
+                self.cancelled = true;
+            }
         }
-        if let Some(device) = self.device.as_mut()
-            && device.write(frame)? != UHID_EVENT_SIZE
-        {
+        let now = boot_ms();
+        if now >= self.next_keepalive {
+            for packet in
+                CtapHid::<crate::env::LinuxEnv>::keepalive(cid, KeepaliveStatus::Processing)
+            {
+                self.send(&packet)?;
+            }
+            self.next_keepalive = now.saturating_add(100);
+        }
+        Ok(())
+    }
+}
+
+impl PacketTransport for UhidTransport {
+    fn send(&mut self, frame: &[u8; 64]) -> Result<()> {
+        if self.0.write(frame)? != UHID_EVENT_SIZE {
             return Err(Error::Invalid("short UHID event write"));
         }
         Ok(())
     }
 
-    pub fn receive(&mut self) -> Result<Option<[u8; 64]>> {
-        #[cfg(any(test, feature = "integration-tests"))]
-        if let Some(packet) = self.input.pop_front() {
-            return Ok(Some(packet));
-        }
-        let Some(device) = self.device.as_mut() else {
-            return Ok(None);
-        };
+    fn receive(&mut self) -> Result<Option<[u8; 64]>> {
+        let device = &mut self.0;
         for _ in 0..16 {
             match device.read() {
                 Ok(OutputEvent::Output { data }) => {
@@ -153,39 +214,6 @@ impl Io {
         }
         Ok(None)
     }
-
-    /// Called only while the core is inside a blocking backend callback.
-    pub fn busy(&mut self) -> Result<()> {
-        let Some(cid) = self.current else {
-            return Ok(());
-        };
-        if let Some(packet) = self.receive()? {
-            let (received, event) = CtapHid::<crate::env::LinuxEnv>::process_single_packet(&packet);
-            if received != cid {
-                for packet in CtapHid::<crate::env::LinuxEnv>::busy_error(received) {
-                    self.send(&packet)?;
-                }
-            } else if matches!(event, ProcessedPacket::InitPacket {cmd, ..} if cmd == CtapHidCommand::Cancel as u8)
-            {
-                self.cancelled = true;
-            }
-        }
-        let now = boot_ms();
-        if now >= self.next_keepalive {
-            for packet in
-                CtapHid::<crate::env::LinuxEnv>::keepalive(cid, KeepaliveStatus::Processing)
-            {
-                self.send(&packet)?;
-            }
-            self.next_keepalive = now.saturating_add(100);
-        }
-        Ok(())
-    }
-
-    #[cfg(any(test, feature = "integration-tests"))]
-    pub fn inject(&mut self, packet: [u8; 64]) {
-        self.input.push_back(packet);
-    }
 }
 
 #[cfg(test)]
@@ -212,29 +240,34 @@ mod tests {
 
     #[test]
     fn busy_channels_and_keepalive_do_not_cross_cancel() {
-        let mut io = Io::default();
+        let memory = MemoryTransport::default();
+        let mut io = Io::with_transport(memory.clone());
         let active = [1, 2, 3, 4];
         let other = [5, 6, 7, 8];
         io.enter(active);
-        io.inject(cancel(other));
+        memory.input.borrow_mut().push_back(cancel(other));
         io.busy().unwrap();
         assert!(!io.cancelled());
         assert!(
-            io.output
+            memory
+                .output
+                .borrow()
                 .iter()
                 .any(|f| f[..4] == other && f[4] == 0xbf && f[7] == 0x06)
         );
         assert!(
-            io.output
+            memory
+                .output
+                .borrow()
                 .iter()
                 .any(|f| f[..4] == active && f[4] == 0xbb && f[7] == 0x01)
         );
         let mut continuation = cancel(active);
         continuation[4] = 0x11;
-        io.inject(continuation);
+        memory.input.borrow_mut().push_back(continuation);
         io.busy().unwrap();
         assert!(!io.cancelled());
-        io.inject(cancel(active));
+        memory.input.borrow_mut().push_back(cancel(active));
         io.busy().unwrap();
         assert!(io.cancelled());
         io.leave();

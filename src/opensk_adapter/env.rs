@@ -2,8 +2,9 @@
 use crate::{
     Error, Result,
     approval::Approval,
-    backend::{Backend, TpmEcdsa},
+    backend::Backend,
     io::{SharedIo, boot_ms, dispatch_desktop},
+    opensk_adapter::{crypto::TpmEcdsa, storage::Storage},
 };
 use opensk::{
     api::{
@@ -22,7 +23,7 @@ use rand::{
     SeedableRng, TryCryptoRng, TryRng,
     rngs::{StdRng, SysRng},
 };
-use std::{path::PathBuf, time::Duration};
+use std::time::Duration;
 
 // OS-seeded random generator implementing OpenSK's marker trait.
 pub struct HostRng(StdRng);
@@ -102,30 +103,14 @@ pub struct LinuxEnv {
     rng: HostRng,
     pub backend: Backend,
     approval: Approval,
+    storage: Storage,
     clock: HostClock,
     connection: Connection,
     profile: CustomizationImpl,
 }
 
 impl LinuxEnv {
-    pub fn new(root: PathBuf, io: SharedIo, uid: u32) -> Result<Self> {
-        let backend = Backend::new(root, io.clone())?;
-        let approval = Approval::new(io.clone(), uid)?;
-        Self::build(backend, approval, io)
-    }
-    #[cfg(any(test, feature = "integration-tests"))]
-    pub fn for_test(root: PathBuf, config: &str, io: SharedIo, allow: bool) -> Result<Self> {
-        let backend = Backend::for_test(root, config, io.clone())?;
-        let approval = Approval::for_test(io.clone(), allow);
-        Self::build(backend, approval, io)
-    }
-    #[cfg(feature = "integration-tests")]
-    pub fn for_test_native(root: PathBuf, config: &str, io: SharedIo) -> Result<Self> {
-        let backend = Backend::for_test(root, config, io.clone())?;
-        let approval = Approval::new(io.clone(), nix::unistd::geteuid().as_raw())?;
-        Self::build(backend, approval, io)
-    }
-    fn build(backend: Backend, approval: Approval, io: SharedIo) -> Result<Self> {
+    pub fn build(backend: Backend, approval: Approval, io: SharedIo) -> Result<Self> {
         let rng = HostRng(
             StdRng::try_from_rng(&mut SysRng)
                 .map_err(|_| Error::Invalid("OS randomness unavailable"))?,
@@ -141,6 +126,7 @@ impl LinuxEnv {
         };
         Ok(Self {
             rng,
+            storage: Storage(backend.clone()),
             backend,
             approval,
             clock: HostClock,
@@ -164,8 +150,8 @@ impl LinuxEnv {
 impl Env for LinuxEnv {
     type Rng = HostRng;
     type UserPresence = Approval;
-    type Persist = Backend;
-    type KeyStore = Backend;
+    type Persist = Storage;
+    type KeyStore = Storage;
     type Clock = HostClock;
     type Crypto = HostCrypto;
     type Write = Sink;
@@ -177,11 +163,11 @@ impl Env for LinuxEnv {
     fn user_presence(&mut self) -> &mut Approval {
         &mut self.approval
     }
-    fn persist(&mut self) -> &mut Backend {
-        &mut self.backend
+    fn persist(&mut self) -> &mut Storage {
+        &mut self.storage
     }
-    fn key_store(&mut self) -> &mut Backend {
-        &mut self.backend
+    fn key_store(&mut self) -> &mut Storage {
+        &mut self.storage
     }
     fn clock(&mut self) -> &mut HostClock {
         &mut self.clock
