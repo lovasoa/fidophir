@@ -5,7 +5,8 @@ mod credential;
 
 use crate::{Error, Result};
 use glib::FileSetContentsFlags as Flags;
-use opensk::api::persist::keys::CREDENTIALS;
+pub mod model;
+const CREDENTIALS: std::ops::Range<usize> = 1700..2000;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::Read;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
@@ -36,6 +37,7 @@ const RECORDS: &[(usize, &str)] = &[
 ];
 
 pub struct Store {
+    codec: &'static dyn model::CredentialCodec,
     path: PathBuf,
     _directory: File,
     uid: u32,
@@ -133,9 +135,10 @@ fn record_key(name: &str) -> Option<usize> {
 }
 
 impl Store {
-    pub fn open(root: &Path) -> Result<Self> {
+    pub fn open(root: &Path, codec: &'static dyn model::CredentialCodec) -> Result<Self> {
         let uid = nix::unistd::geteuid().as_raw();
         let store = Self {
+            codec,
             path: root.join("v2"),
             _directory: lock(root, uid)?,
             uid,
@@ -357,10 +360,7 @@ impl Store {
         }
         Ok(false)
     }
-    pub fn create_non_discoverable(
-        &self,
-        source: opensk::api::key_store::CredentialSource,
-    ) -> Result<Vec<u8>> {
+    pub fn create_non_discoverable(&self, source: model::CredentialSource) -> Result<Vec<u8>> {
         use rand::{TryRng, rngs::SysRng};
         let dir = self.path.join("non-discoverable");
         self.check_dir(&dir)?;
@@ -381,7 +381,7 @@ impl Store {
         &self,
         id: &[u8; 32],
         rp_hash: &[u8; 32],
-    ) -> Result<Option<opensk::api::key_store::CredentialSource>> {
+    ) -> Result<Option<model::CredentialSource>> {
         let dir = self.path.join("non-discoverable");
         self.check_dir(&dir)?;
         for slot in 0..CREDENTIALS.len() {

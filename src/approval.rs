@@ -256,7 +256,7 @@ struct Pending {
     task: glib::JoinHandle<()>,
 }
 
-pub struct Approval {
+struct DesktopApproval {
     io: SharedIo,
     connection: Option<DBusConnection>,
     uid: u32,
@@ -264,11 +264,9 @@ pub struct Approval {
     start_error: bool,
     operation: Option<&'static str>,
     rp_id: Option<String>,
-    #[cfg(any(test, feature = "integration-tests"))]
-    test_decision: Option<bool>,
 }
 
-impl Approval {
+impl DesktopApproval {
     pub fn new(io: SharedIo, uid: u32) -> Result<Self> {
         let connection = gio::bus_get_sync(gio::BusType::System, gio::Cancellable::NONE)?;
         Ok(Self {
@@ -279,22 +277,7 @@ impl Approval {
             start_error: false,
             operation: None,
             rp_id: None,
-            #[cfg(any(test, feature = "integration-tests"))]
-            test_decision: None,
         })
-    }
-    #[cfg(any(test, feature = "integration-tests"))]
-    pub fn for_test(io: SharedIo, allow: bool) -> Self {
-        Self {
-            io,
-            connection: None,
-            uid: 0,
-            pending: None,
-            start_error: false,
-            operation: None,
-            rp_id: None,
-            test_decision: Some(allow),
-        }
     }
     pub fn set_context(&mut self, operation: Option<&'static str>, rp: Option<&str>) {
         self.operation = operation;
@@ -322,14 +305,10 @@ impl Approval {
     }
 }
 
-impl UserPresence for Approval {
+impl UserPresence for DesktopApproval {
     fn check_init(&mut self) {
         self.cancel();
         self.start_error = false;
-        #[cfg(any(test, feature = "integration-tests"))]
-        if self.test_decision.is_some() {
-            return;
-        }
         let mut nonce = [0u8; 16];
         let rp = match self.rp_id.as_deref() {
             Some(id)
@@ -408,14 +387,6 @@ impl UserPresence for Approval {
             } else {
                 None
             };
-            #[cfg(any(test, feature = "integration-tests"))]
-            if let Some(allow) = self.test_decision {
-                outcome = Some(if allow {
-                    Ok(())
-                } else {
-                    Err(UserPresenceError::Declined)
-                });
-            }
             if let Some(pending) = &self.pending
                 && let Some(result) = pending.result.borrow_mut().take()
             {
@@ -444,8 +415,78 @@ impl UserPresence for Approval {
     }
 }
 
-impl Drop for Approval {
+impl Drop for DesktopApproval {
     fn drop(&mut self) {
         self.cancel();
     }
+}
+
+/// Select a presence implementation at construction; desktop code has no test branches.
+pub struct Approval(Box<dyn PresenceProvider>);
+trait PresenceProvider: UserPresence {
+    fn set_context(&mut self, operation: Option<&'static str>, rp: Option<&str>);
+}
+impl PresenceProvider for DesktopApproval {
+    fn set_context(&mut self, operation: Option<&'static str>, rp: Option<&str>) {
+        DesktopApproval::set_context(self, operation, rp);
+    }
+}
+impl Approval {
+    pub fn new(io: SharedIo, uid: u32) -> Result<Self> {
+        Ok(Self(Box::new(DesktopApproval::new(io, uid)?)))
+    }
+    pub fn fixed(io: SharedIo, allow: bool) -> Self {
+        Self(Box::new(FixedApproval { io, allow }))
+    }
+    pub fn set_context(&mut self, operation: Option<&'static str>, rp: Option<&str>) {
+        self.0.set_context(operation, rp);
+    }
+}
+impl UserPresence for Approval {
+    fn check_init(&mut self) {
+        self.0.check_init();
+    }
+    fn wait_with_timeout(
+        &mut self,
+        packet: &mut [u8; 64],
+        timeout_ms: usize,
+    ) -> UserPresenceWaitResult {
+        self.0.wait_with_timeout(packet, timeout_ms)
+    }
+    fn check_complete(&mut self) {
+        self.0.check_complete();
+    }
+}
+struct FixedApproval {
+    io: SharedIo,
+    allow: bool,
+}
+impl PresenceProvider for FixedApproval {
+    fn set_context(&mut self, _: Option<&'static str>, _: Option<&str>) {}
+}
+impl UserPresence for FixedApproval {
+    fn check_init(&mut self) {}
+    fn wait_with_timeout(&mut self, packet: &mut [u8; 64], _: usize) -> UserPresenceWaitResult {
+        let received = self
+            .io
+            .borrow_mut()
+            .receive()
+            .map_err(|_| Ctap2StatusCode::CTAP2_ERR_VENDOR_HARDWARE_FAILURE)?;
+        dispatch_desktop();
+        let status = if let Some(input) = received {
+            *packet = input;
+            RecvStatus::Received(UsbEndpoint::MainHid)
+        } else {
+            RecvStatus::Timeout
+        };
+        Ok((
+            if self.allow {
+                Ok(())
+            } else {
+                Err(UserPresenceError::Declined)
+            },
+            status,
+        ))
+    }
+    fn check_complete(&mut self) {}
 }

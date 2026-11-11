@@ -12,18 +12,19 @@
 //!
 //! Crypto methods without an `Env` parameter use `scope` to select the current
 //! backend. The request boundary owns this scope and prevents nested dispatch.
+pub mod credential;
+pub mod crypto;
+pub mod env;
 pub(crate) mod scope;
+pub mod storage;
 
 use crate::{env::LinuxEnv, io::boot_ms};
-use opensk::{
-    api::persist::Persist,
-    ctap::{
-        Channel, CtapState, check_user_presence,
-        command::Command,
-        data_formats::ClientPinSubCommand,
-        hid::{CtapHid, CtapHidCommand, CtapHidError, HidPacket, HidPacketIterator, Message},
-        status_code::{Ctap2StatusCode as Status, CtapResult},
-    },
+use opensk::ctap::{
+    Channel, CtapState, check_user_presence,
+    command::Command,
+    data_formats::ClientPinSubCommand,
+    hid::{CtapHid, CtapHidCommand, CtapHidError, HidPacket, HidPacketIterator, Message},
+    status_code::{Ctap2StatusCode as Status, CtapResult},
 };
 
 /// One serialized authenticator, shared by production and the integration runner.
@@ -115,7 +116,9 @@ fn prepare_command(env: &mut LinuxEnv, command: &Command, channel: Channel) -> C
             SetPin => {
                 env.backend.clear();
                 env.set_approval_context(Some("set up your security key PIN"), None);
-                if env.backend.pin_hash()?.is_none() {
+                if opensk::api::persist::Persist::pin_hash(opensk::env::Env::persist(env))?
+                    .is_none()
+                {
                     // Upstream has no initial-setup presence check. Reuse its
                     // public helper, including keepalives and cancellation.
                     check_user_presence(env, channel)?;

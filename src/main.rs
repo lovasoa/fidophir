@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 use fidophir::{
     Error, Result,
-    env::LinuxEnv,
     io::{Io, dispatch_desktop},
     opensk_adapter::Authenticator,
 };
@@ -36,7 +35,7 @@ fn run() -> Result<()> {
         .acquire()
         .map_err(|_| Error::Invalid("desktop main context unavailable"))?;
     let io = Io::shared();
-    let mut env = LinuxEnv::new(root, io.clone(), uid)?;
+    let mut env = fidophir::runtime::system(root, io.clone(), uid)?;
     let mut authenticator = Authenticator::new(&mut env);
     io.borrow_mut().publish(uid)?;
     info!("authenticator ready");

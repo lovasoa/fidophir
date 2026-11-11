@@ -1,15 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! INI and binary files are authoritative; CBOR is only the OpenSK interface.
+use super::model::{CredentialSource, ResidentCredential};
 use super::*;
-use opensk::{
-    api::key_store::CredentialSource,
-    ctap::{
-        cbor_read, cbor_write,
-        data_formats::{
-            CredentialProtectionPolicy, PublicKeyCredentialSource, PublicKeyCredentialType,
-        },
-    },
-};
 use sk_cbor::Value;
 
 const GROUP: &str = "credential";
@@ -17,7 +9,7 @@ const GROUP: &str = "credential";
 /// Key material and policy shared by both discovery modes.
 struct CredentialKey {
     wrapped_private_key: Value,
-    protection: Option<CredentialProtectionPolicy>,
+    protection: Option<u8>,
     blob: Option<Vec<u8>>,
 }
 
@@ -125,12 +117,7 @@ impl<'a> CredentialDirectory<'a> {
         Ok(())
     }
 
-    fn write_key(
-        &self,
-        key: Value,
-        policy: Option<CredentialProtectionPolicy>,
-        cred_blob: Option<&[u8]>,
-    ) -> Result<()> {
+    fn write_key(&self, key: Value, policy: Option<u8>, cred_blob: Option<&[u8]>) -> Result<()> {
         let blob = signing_blob(key)?;
         validate_signing_blob(&blob)?;
         if let Some(policy) = policy {
@@ -151,7 +138,12 @@ impl<'a> CredentialDirectory<'a> {
         })?;
         let policy = self
             .number("cred_protect_policy")?
-            .map(|p| CredentialProtectionPolicy::try_from(Value::unsigned(p)))
+            .map(|p| {
+                u8::try_from(p)
+                    .ok()
+                    .filter(|p| (1..=3).contains(p))
+                    .ok_or(())
+            })
             .transpose()
             .map_err(|_| self.invalid("cred_protect_policy"))?;
         Ok(CredentialKey {
@@ -182,10 +174,10 @@ fn validate_signing_blob(bytes: &[u8]) -> Result<()> {
 }
 
 pub(super) fn write(store: &Store, path: &Path, bytes: &[u8]) -> Result<()> {
-    let c = cbor_read(bytes)
-        .ok()
-        .and_then(|v| PublicKeyCredentialSource::try_from(v).ok())
-        .ok_or_else(|| problem(path, "invalid credential CBOR"))?;
+    let c = store
+        .codec
+        .decode(bytes)
+        .map_err(|_| problem(path, "invalid credential CBOR"))?;
     let record = CredentialDirectory::new(store, path);
     record
         .metadata
@@ -212,8 +204,7 @@ pub(super) fn write(store: &Store, path: &Path, bytes: &[u8]) -> Result<()> {
 pub(super) fn read(store: &Store, path: &Path) -> Result<Vec<u8>> {
     let record = CredentialDirectory::open(store, path)?;
     let key = record.read_key()?;
-    let c = PublicKeyCredentialSource {
-        key_type: PublicKeyCredentialType::PublicKey,
+    let c = ResidentCredential {
         credential_id: record.required("credential-id.bin")?,
         wrapped_private_key: key.wrapped_private_key,
         rp_id: record
@@ -234,8 +225,10 @@ pub(super) fn read(store: &Store, path: &Path) -> Result<Vec<u8>> {
             "invalid credential ID, user handle or RP ID",
         ));
     }
-    let mut bytes = Vec::new();
-    cbor_write(c.into(), &mut bytes).map_err(|_| record.invalid("credential encoding"))?;
+    let bytes = store
+        .codec
+        .encode(c)
+        .map_err(|_| record.invalid("credential encoding"))?;
     if bytes.len() > MAX_VALUE {
         return Err(invalid_credential(path, "credential exceeds 4096 bytes"));
     }

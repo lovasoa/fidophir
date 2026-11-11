@@ -2,7 +2,7 @@
 //! Test-only CBOR pipe transport for independent FIDO clients; never packaged.
 use fidophir::{
     env::LinuxEnv,
-    io::{Io, dispatch_desktop},
+    io::{Io, MemoryTransport, dispatch_desktop},
     opensk_adapter::Authenticator,
 };
 use opensk::ctap::hid::{CtapHid, CtapHidCommand, HidPacketIterator, Message, MessageAssembler};
@@ -43,18 +43,16 @@ fn main() {
     );
     let context = glib::MainContext::default();
     let _guard = context.acquire().expect("test main context");
-    let io = Io::shared();
-    let mut env = if args[3].starts_with("native") {
-        LinuxEnv::for_test_native(args[1].clone().into(), &args[2], io.clone())
+    let memory = MemoryTransport::default();
+    let io = std::rc::Rc::new(std::cell::RefCell::new(Io::with_transport(memory.clone())));
+    let decision = if args[3].starts_with("native") {
+        None
     } else {
-        LinuxEnv::for_test(
-            args[1].clone().into(),
-            &args[2],
-            io.clone(),
-            matches!(args[3].as_str(), "allow" | "uhid"),
-        )
-    }
-    .expect("test environment");
+        Some(matches!(args[3].as_str(), "allow" | "uhid"))
+    };
+    let mut env =
+        fidophir::runtime::simulator(args[1].clone().into(), &args[2], io.clone(), decision)
+            .expect("test environment");
     let mut authenticator = Authenticator::new(&mut env);
     if args[3] == "uhid" {
         io.borrow_mut().publish(u32::MAX).expect("test UHID device");
@@ -104,12 +102,12 @@ fn main() {
         env.backend
             .expire_pin_authorization(fidophir::io::boot_ms());
         if args[3] == "native-cancel" && bytes[0] == 1 {
-            let io = io.clone();
+            let input = memory.input.clone();
             glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
                 let mut cancel = [0u8; 64];
                 cancel[..4].copy_from_slice(&cid);
                 cancel[4] = 0x91;
-                io.borrow_mut().inject(cancel);
+                input.borrow_mut().push_back(cancel);
             });
         }
         let response = exchange(

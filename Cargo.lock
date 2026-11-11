@@ -341,9 +341,11 @@ dependencies = [
  "opensk",
  "p256",
  "rand",
+ "sha2",
  "sk-cbor",
  "tss-esapi",
  "uhid-virt",
+ "zeroize",
 ]
 
 [[package]]

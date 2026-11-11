@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! TPM storage hierarchy. Signing scalars are generated and used only inside TPM.
+use crate::core::Secret;
 use crate::{Error, Result};
-use opensk::{
-    api::crypto::{rust_crypto::SoftwareSha256, sha256::Sha256 as _},
-    ctap::{cbor_read, cbor_write, secret::Secret},
-};
 use rand::{TryRng, rngs::SysRng};
+use sha2::{Digest as _, Sha256};
 use sk_cbor::{Value, cbor_array};
+use sk_cbor::{read as cbor_read, write as cbor_write};
 use tss_esapi::{
     Context,
     attributes::{ObjectAttributes, ObjectAttributesBuilder, SessionAttributesBuilder},
@@ -346,7 +345,7 @@ impl Tpm {
     }
 
     pub fn provision(&mut self, hash: &[u8; 16], length: u8) -> Result<ParentRecord> {
-        let mut master = Secret::from_exposed_secret([0u8; 64]);
+        let mut master = Secret::new([0u8; 64]);
         SysRng
             .try_fill_bytes(&mut *master)
             .map_err(|_| Error::Invalid("OS randomness unavailable"))?;
@@ -401,7 +400,7 @@ impl Tpm {
         if bytes.value().len() != 64 {
             return Err(Error::Invalid("invalid sealed master length"));
         }
-        let mut master = Secret::from_exposed_secret([0u8; 64]);
+        let mut master = Secret::new([0u8; 64]);
         master.copy_from_slice(bytes.value());
         Ok(master)
     }
@@ -426,7 +425,7 @@ impl Tpm {
         message: &[u8],
     ) -> Result<p256::ecdsa::Signature> {
         validate(&key.public, Kind::Signing)?;
-        let digest = SoftwareSha256::digest(message);
+        let digest = Sha256::digest(message);
         let signature = self.with_parent(record, hash, |ctx, p, _root| {
             let k = ctx.load(p, key.private.clone(), key.public.clone())?;
             ctx.execute_with_temporary_object(k.into(), |ctx, _| {
