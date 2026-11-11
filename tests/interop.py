@@ -163,6 +163,22 @@ def check_logging(binary, base, tcti):
                 {"id": b"probe-user", "name": "test", "displayName": "Test"},
                 [{"type": "public-key", "alg": -7}], options={"rk": False},
                 pin_uv_param=protocol.authenticate(token, digest), pin_uv_protocol=protocol.VERSION)
+            # Empty PIN authentication selects the authenticator; PIN_INVALID
+            # here is an expected response, not an incorrect PIN attempt.
+            retries = ClientPin(ctap).get_pin_retries()
+            for method in ("create", "get"):
+                authorize(ctap, pin, ClientPin.PERMISSION.GET_ASSERTION, rp)
+                if method == "create":
+                    expect(CtapError.ERR.PIN_INVALID, lambda: ctap.make_credential(
+                        os.urandom(32), {"id": rp},
+                        {"id": b"probe-user", "name": "test"},
+                        [{"type": "public-key", "alg": -7}],
+                        pin_uv_param=b"", pin_uv_protocol=protocol.VERSION))
+                else:
+                    expect(CtapError.ERR.PIN_INVALID, lambda: ctap.get_assertion(
+                        rp, os.urandom(32), pin_uv_param=b"",
+                        pin_uv_protocol=protocol.VERSION))
+                assert ClientPin(ctap).get_pin_retries() == retries
             protocol, token = authorize(ctap, pin, ClientPin.PERMISSION.GET_ASSERTION, "private-site.example")
             digest = os.urandom(32)
             expect(CtapError.ERR.NO_CREDENTIALS, lambda: ctap.get_assertion(
@@ -180,6 +196,19 @@ def check_logging(binary, base, tcti):
                    "request options user_presence=true user_verification=false pin_authentication_present=true pin_authentication_protocol_present=true allow_list_present=true",
                    "Set up security key PIN: completed", "incorrect PIN", "duration_milliseconds=", "<4>", "<6>"):
         assert phrase in log, (phrase, log)
+    probes = [line for line in log.splitlines() if "selection probe completed" in line]
+    assert len(probes) == 2, log
+    for line in probes:
+        assert line.startswith("<6>"), line
+        assert "Select security key:" in line and "status=0x31" in line, line
+        assert "no PIN was checked" in line and "incorrect PIN" not in line, line
+    assert log.count("pin_authentication=empty") == 2, log
+    assert "pin_authentication=absent" in log and "pin_authentication=nonempty" in log
+    for line in log.splitlines():
+        if "silent credential lookup found no eligible matching passkey" in line:
+            assert line.startswith("<6>"), line
+    assert "silent credential lookup found no eligible matching passkey" in log
+    assert "Verify security key PIN: incorrect PIN" in log
     for secret in (pin, "private-user-handle-58921", "private-site.example", "private-wrong-pin-7139",
                    "Test account", "private-missing-credential-7219", credential.credential_id.hex(),
                    nonresident.credential_id.hex(), token.hex(), digest.hex()):

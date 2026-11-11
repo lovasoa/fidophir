@@ -83,6 +83,7 @@ impl Interaction {
         }
     }
     pub(crate) fn finish(self, status: ResponseStatus, quiet: bool) {
+        let (level, outcome) = diagnostic(self.context.as_ref(), status);
         if status != ResponseStatus::Known(Status::CTAP2_OK)
             && let Some(context) = &self.context
         {
@@ -90,10 +91,10 @@ impl Interaction {
         }
         if !quiet || status != ResponseStatus::Known(Status::CTAP2_OK) {
             log::log!(
-                status.level(),
+                level,
                 "{}: {}; status={} duration_milliseconds={}",
                 self.name,
-                status.outcome(),
+                outcome,
                 status,
                 self.start.elapsed().as_millis(),
             );
@@ -101,7 +102,34 @@ impl Interaction {
     }
 }
 
-// Only reviewed booleans belong here; never retain raw CTAP request data.
+// Only reviewed classifications belong here; never retain raw CTAP request data.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PinAuthentication {
+    Absent,
+    Empty,
+    Nonempty,
+}
+
+impl PinAuthentication {
+    fn classify(param: &Option<Vec<u8>>) -> Self {
+        match param {
+            None => Self::Absent,
+            Some(bytes) if bytes.is_empty() => Self::Empty,
+            Some(_) => Self::Nonempty,
+        }
+    }
+}
+
+impl fmt::Display for PinAuthentication {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Absent => "absent",
+            Self::Empty => "empty",
+            Self::Nonempty => "nonempty",
+        })
+    }
+}
+
 enum RequestContext {
     MakeCredential(MakeCredentialContext),
     GetAssertion(GetAssertionContext),
@@ -112,6 +140,7 @@ struct MakeCredentialContext {
     user_verification: bool,
     // Presence only: the authentication parameter itself is secret.
     pin_authentication_present: bool,
+    pin_authentication: PinAuthentication,
     pin_authentication_protocol_present: bool,
     es256_offered: bool,
     // Presence only: the list contains credential identifiers.
@@ -130,6 +159,7 @@ struct GetAssertionContext {
     user_verification: bool,
     // Presence only: the authentication parameter itself is secret.
     pin_authentication_present: bool,
+    pin_authentication: PinAuthentication,
     pin_authentication_protocol_present: bool,
     // Presence only: the list contains credential identifiers.
     allow_list_present: bool,
@@ -144,7 +174,7 @@ impl fmt::Display for RequestContext {
         match self {
             Self::MakeCredential(p) => write!(
                 f,
-                "resident_key={} user_verification={} pin_authentication_present={} pin_authentication_protocol_present={} es256_offered={} exclude_list_present={} hmac_secret={} credential_protection_present={} credential_blob_present={} large_blob_key_present={} minimum_pin_length={} enterprise_attestation_present={}",
+                "resident_key={} user_verification={} pin_authentication_present={} pin_authentication_protocol_present={} es256_offered={} exclude_list_present={} hmac_secret={} credential_protection_present={} credential_blob_present={} large_blob_key_present={} minimum_pin_length={} enterprise_attestation_present={} pin_authentication={}",
                 p.resident_key,
                 p.user_verification,
                 p.pin_authentication_present,
@@ -156,11 +186,12 @@ impl fmt::Display for RequestContext {
                 p.credential_blob_present,
                 p.large_blob_key_present,
                 p.minimum_pin_length,
-                p.enterprise_attestation_present
+                p.enterprise_attestation_present,
+                p.pin_authentication
             ),
             Self::GetAssertion(p) => write!(
                 f,
-                "user_presence={} user_verification={} pin_authentication_present={} pin_authentication_protocol_present={} allow_list_present={} hmac_secret_present={} credential_blob={} large_blob_key_present={}",
+                "user_presence={} user_verification={} pin_authentication_present={} pin_authentication_protocol_present={} allow_list_present={} hmac_secret_present={} credential_blob={} large_blob_key_present={} pin_authentication={}",
                 p.user_presence,
                 p.user_verification,
                 p.pin_authentication_present,
@@ -168,7 +199,8 @@ impl fmt::Display for RequestContext {
                 p.allow_list_present,
                 p.hmac_secret_present,
                 p.credential_blob,
-                p.large_blob_key_present
+                p.large_blob_key_present,
+                p.pin_authentication
             ),
         }
     }
@@ -181,6 +213,7 @@ fn request_context(command: Option<&Command>) -> Option<RequestContext> {
                 resident_key: p.options.rk,
                 user_verification: p.options.uv,
                 pin_authentication_present: p.pin_uv_auth_param.is_some(),
+                pin_authentication: PinAuthentication::classify(&p.pin_uv_auth_param),
                 pin_authentication_protocol_present: p.pin_uv_auth_protocol.is_some(),
                 es256_offered: p
                     .pub_key_cred_params
@@ -200,6 +233,7 @@ fn request_context(command: Option<&Command>) -> Option<RequestContext> {
                 user_presence: p.options.up,
                 user_verification: p.options.uv,
                 pin_authentication_present: p.pin_uv_auth_param.is_some(),
+                pin_authentication: PinAuthentication::classify(&p.pin_uv_auth_param),
                 pin_authentication_protocol_present: p.pin_uv_auth_protocol.is_some(),
                 allow_list_present: p.allow_list.is_some(),
                 hmac_secret_present: p.extensions.hmac_secret.is_some(),
@@ -216,9 +250,59 @@ impl Drop for Interaction {
     }
 }
 
+fn is_selection_probe(command: &Command) -> bool {
+    let param = match command {
+        Command::AuthenticatorMakeCredential(p) => &p.pin_uv_auth_param,
+        Command::AuthenticatorGetAssertion(p) => &p.pin_uv_auth_param,
+        _ => return false,
+    };
+    PinAuthentication::classify(param) == PinAuthentication::Empty
+}
+
+fn diagnostic(
+    context: Option<&RequestContext>,
+    status: ResponseStatus,
+) -> (log::Level, &'static str) {
+    let authentication = match context {
+        Some(RequestContext::MakeCredential(p)) => Some(p.pin_authentication),
+        Some(RequestContext::GetAssertion(p)) => Some(p.pin_authentication),
+        None => None,
+    };
+    if authentication == Some(PinAuthentication::Empty) {
+        match status {
+            ResponseStatus::Known(Status::CTAP2_ERR_PIN_INVALID) => {
+                return (
+                    log::Level::Info,
+                    "selection probe completed; PIN is configured; no PIN was checked and no passkey was created or used",
+                );
+            }
+            ResponseStatus::Known(Status::CTAP2_ERR_PIN_NOT_SET) => {
+                return (
+                    log::Level::Info,
+                    "selection probe completed; PIN is not configured; no passkey was created or used",
+                );
+            }
+            _ => (),
+        }
+    }
+    if let Some(RequestContext::GetAssertion(p)) = context
+        && !p.user_presence
+        && status == ResponseStatus::Known(Status::CTAP2_ERR_NO_CREDENTIALS)
+    {
+        return (
+            log::Level::Info,
+            "silent credential lookup found no eligible matching passkey; no sign-in assertion was produced",
+        );
+    }
+    (status.level(), status.outcome())
+}
+
 pub fn operation(command: Option<&Command>) -> Option<&'static str> {
     use ClientPinSubCommand::*;
     use Command::*;
+    if command.is_some_and(is_selection_probe) {
+        return Some("Select security key");
+    }
     match command {
         Some(AuthenticatorGetInfo) => None,
         Some(AuthenticatorClientPin(p)) => match p.sub_command {
