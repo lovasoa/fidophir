@@ -47,6 +47,8 @@ jobs:
               exit 0
             fi
           else
+            # cargo upgrade updates Git dependencies offline and needs cached branch refs.
+            cargo update
             cargo upgrade
           fi
           cargo update
