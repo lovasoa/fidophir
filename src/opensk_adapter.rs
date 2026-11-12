@@ -19,6 +19,7 @@ pub(crate) mod scope;
 pub mod storage;
 
 use crate::{env::LinuxEnv, io::boot_ms};
+use opensk::api::key_store::KeyStore;
 use opensk::ctap::{
     Channel, CtapState, check_user_presence,
     command::Command,
@@ -73,7 +74,6 @@ impl Authenticator {
         let backend = env.backend.clone();
         scope::with_backend(&backend, || {
             env.set_approval_context(None, None);
-            env.backend.take_tpm_lockout();
             let command = Command::deserialize(bytes);
             let quiet = command
                 .as_ref()
@@ -87,9 +87,6 @@ impl Authenticator {
                 Ok(()) => self.state.process_command(env, bytes, channel),
                 Err(status) => vec![status as u8],
             };
-            if env.backend.take_tpm_lockout() {
-                response = vec![Status::CTAP2_ERR_PIN_AUTH_BLOCKED as u8];
-            }
             if env.command_was_cancelled() {
                 response = vec![Status::CTAP2_ERR_KEEPALIVE_CANCEL as u8];
             }
@@ -116,9 +113,7 @@ fn prepare_command(env: &mut LinuxEnv, command: &Command, channel: Channel) -> C
             SetPin => {
                 env.backend.clear();
                 env.set_approval_context(Some("set up your security key PIN"), None);
-                if opensk::api::persist::Persist::pin_hash(opensk::env::Env::persist(env))?
-                    .is_none()
-                {
+                if !opensk::env::Env::key_store(env).has_pin()? {
                     // Upstream has no initial-setup presence check. Reuse its
                     // public helper, including keepalives and cancellation.
                     check_user_presence(env, channel)?;

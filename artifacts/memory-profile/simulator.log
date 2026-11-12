@@ -1,0 +1,2 @@
+swtpm: Warning: Profile-enabled algorithms contain disabled 'RSA-1024-sign(SHA1, pkcs1-pss)'
+swtpm: Warning: Setting OPENSSL_ENABLE_SHA1_SIGNATURES=1
