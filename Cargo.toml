@@ -23,7 +23,7 @@ glib = { version = "0.22.10", features = ["v2_66"] }
 gio = "0.22.10"
 nix = { version = "0.31.3", features = ["time", "process", "user"] }
 rand = { version = "0.10.3", default-features = false, features = ["std", "std_rng", "sys_rng"] }
-tss-esapi = "7.6.0"
+tss-esapi = "7.7.0"
 uhid-virt = "0.0.8"
 p256 = { version = "0.14", default-features = false, features = ["alloc", "ecdsa"] }
 
