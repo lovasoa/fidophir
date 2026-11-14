@@ -43,7 +43,9 @@ jobs:
         run: |
           if [[ "$UPDATE_TRACK" == major ]]; then
             cargo upgrade --compatible ignore --incompatible allow --pinned allow
-            if git diff --quiet -- Cargo.toml; then
+            # Checkout configures safe.directory only for its own step.
+            changed=$(git -c safe.directory="$GITHUB_WORKSPACE" diff --name-only -- Cargo.toml)
+            if [[ -z "$changed" ]]; then
               exit 0
             fi
           else
