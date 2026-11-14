@@ -16,6 +16,13 @@ make integration
 
 These tests use a disposable software TPM and a private D-Bus session. For package lifecycle tests in a disposable VM, see [the systemd test instructions](tests/systemd/README.md).
 
+CI also runs the HID integration suite on a disposable Linux runner with stock
+`fido2-tools`. The device must appear in `fido2-token -L` before the tools set a
+PIN, register, sign, and manage credentials. The RPM and DEB lifecycle tests
+require the same discovery as the intended desktop user after installation and
+service restarts. Publication depends on both jobs. CI does not run a browser;
+the website checks below are manual acceptance results from earlier builds.
+
 ## Validated
 
 Example test systems: Fedora 44 and 45.

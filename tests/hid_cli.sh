@@ -80,6 +80,13 @@ if [[ -z $device || ! -r $device || ! -w $device || ! -L /dev/fidophir-429496729
     ls -l /dev/fidophir-* >&2 || true
     exit 1
 fi
+# Explicit-path commands bypass FIDO discovery and can work with an invalid
+# descriptor or an unsupported bus. Require the stock client's discovery first.
+if ! fido2-token -L | awk -v device="$device:" '$1 == device { found = 1 } END { exit !found }'; then
+    echo 'libfido2 did not discover the Fidophir test device' >&2
+    fido2-token -d -L >&2
+    exit 1
+fi
 device=/dev/fidophir-4294967295
 
 # A detached session makes the tools read the synthetic PINs from stdin.
@@ -111,4 +118,4 @@ credential_id=$(awk 'NR == 1 {print $2}' "$test_dir/credentials")
 printf '8765\n' | setsid fido2-token -D -i "$credential_id" "$device"
 printf '8765\n' | setsid fido2-token -I -c "$device" >"$test_dir/metadata"
 grep -Fxq 'existing rk(s): 0' "$test_dir/metadata"
-echo 'PASS: FIDO CLI PIN, verified registration and signing, and credential management through UHID and hidraw'
+echo 'PASS: libfido2 discovery, PIN, verified registration and signing, and credential management through UHID and hidraw'

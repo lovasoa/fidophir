@@ -15,7 +15,7 @@ pub type SharedIo = Rc<RefCell<Io>>;
 /// https://fidoalliance.org/specs/u2f-specs-master/fido-u2f-hid-protocol.html
 #[rustfmt::skip]
 const FIDO_HID_REPORT_DESCRIPTOR: &[u8] = &[
-    0x06, 0xF1, 0xD0, // Usage Page (FIDO Alliance, 0xF1D0)
+    0x06, 0xD0, 0xF1, // Usage Page (FIDO Alliance, 0xF1D0, little-endian)
     0x09, 0x01,       // Usage (U2F Authenticator Device)
     0xa1, 0x01,       // Collection (Application)
     0x09, 0x20,       //   Usage (Input Report Data: device → host)
@@ -116,7 +116,8 @@ impl Io {
             name: "Fidophir Trusted Platform Module".into(),
             phys: "fidophir-v2".into(),
             uniq: uid.to_string(),
-            bus: Bus::VIRTUAL,
+            // libfido2 discovers USB HID devices; UHID still provides the transport.
+            bus: Bus::USB,
             vendor: 0,
             product: 1,
             version: 1,

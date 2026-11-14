@@ -31,8 +31,10 @@ published separately. This avoids depending on the runner kernel's optional
 vTPM proxy module and preserves every production service sandbox setting.
 
 The test installs that package with its native package manager. Real systemd
-user managers activate the real daemon, whose CTAP GetInfo is queried through
-UHID/hidraw as each device's intended user. It checks installed udev ownership,
+user managers activate the real daemon. Stock libfido2 must discover its device
+with `fido2-token -L` as the intended user before CTAP GetInfo is queried through
+UHID/hidraw. This checks the FIDO descriptor and USB bus identity as well as access
+permissions; opening an explicit path alone skips discovery. It checks installed udev ownership,
 state permissions, repeated crash recovery, logout, package reinstall, target
 restart, removal with state retention, and policy-denied installation. A PIN
 setup request without a graphical session must fail closed.

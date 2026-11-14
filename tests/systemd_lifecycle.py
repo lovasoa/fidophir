@@ -57,9 +57,14 @@ def ready(uid):
                 os.mknod(node, stat.S_IFCHR | 0o600, os.makedev(major, minor))
             run('udevadm', 'trigger', '--action=add', '--settle', str(entry))
         return False
-    # Inspect the daemon's real CTAP GetInfo through the packaged udev symlink.
-    # This also verifies the intended user can open the device.
+    # Require stock libfido2 discovery as the intended user before querying it.
+    # Explicit-path GetInfo alone bypasses descriptor and bus validation.
     try:
+        discovery = subprocess.run(['runuser', '-u', f'key{uid}', '--', 'fido2-token', '-L'],
+                                   capture_output=True, text=True, timeout=5)
+        if discovery.returncode != 0 or not any(
+                line.startswith(f'{device.resolve()}: ') for line in discovery.stdout.splitlines()):
+            return False
         result = subprocess.run(['runuser', '-u', f'key{uid}', '--', 'fido2-token', '-I', str(device)],
                                 capture_output=True, text=True, timeout=5)
     except subprocess.TimeoutExpired:
@@ -94,7 +99,7 @@ def main(package):
     assert state.stat().st_uid == owner and state.stat().st_mode & 0o777 == 0o700
     device = Path('/dev/fidophir-1000')
     assert device.stat().st_uid == 1000 and device.stat().st_mode & 0o777 == 0o600
-    print('PASS: built package, real daemon, TPM, UHID, udev ownership and existing-login activation', flush=True)
+    print('PASS: built package, libfido2 discovery, real daemon, TPM, UHID, udev ownership and existing-login activation', flush=True)
     # More failures than the old burst limit must recover without manual starts.
     for _ in range(4):
         before = pid('fidophir@1000.service')
@@ -141,9 +146,11 @@ if __name__ == '__main__':
             print(f'Device {device}: exists={device.exists()} symlink={device.is_symlink()}', flush=True)
             if device.exists():
                 try:
+                    subprocess.run(['runuser', '-u', f'key{uid}', '--', 'fido2-token', '-d', '-L'],
+                                   timeout=5)
                     subprocess.run(['runuser', '-u', f'key{uid}', '--', 'fido2-token', '-I', str(device)],
                                    timeout=5)
                 except subprocess.TimeoutExpired:
-                    print('GetInfo client timed out', flush=True)
+                    print('FIDO client timed out', flush=True)
         subprocess.run(['journalctl', '-b', '--no-pager', '-n', '200'])
         raise
