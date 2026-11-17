@@ -108,6 +108,14 @@ def main(package):
     print('PASS: four consecutive crashes recover through the production restart policy', flush=True)
     run('systemctl', 'start', 'user@1001.service')
     wait(lambda: ready(1001))
+    stores = state.parent
+    for uid in (1000, 1001):
+        daemon_pid = pid(f'fidophir@{uid}.service')
+        view = Path(f'/proc/{daemon_pid}/root') / stores.relative_to('/')
+        assert sorted(entry.name for entry in view.iterdir()) == [str(uid)]
+        assert (view / str(uid)).samefile(stores / str(uid))
+        assert not os.statvfs(view / str(uid)).f_flag & os.ST_RDONLY
+    print('PASS: each running daemon sees only its own writable credential store', flush=True)
     run('systemctl', 'stop', 'user@1001.service')
     wait(lambda: not active('fidophir@1001.service') and not Path('/dev/fidophir-1001').exists())
     assert Path('/var/lib/fidophir-users/1001').exists()

@@ -58,11 +58,13 @@ The packages install the service template, a template dependency in `user@.servi
 
 Each instance runs as the dedicated `fidophir` account with supplementary `tss` access. `StateDirectory=` creates each private directory and supplies `$STATE_DIRECTORY` to the daemon; state is separate under `/var/lib/fidophir-users/UID/v2`. udev assigns each generated hidraw device to its user, mode 0600, without `uaccess` or shared client groups. Desktop approval selects that UID's unique active, local, unlocked graphical session; ambiguous sessions fail closed. SSH-only and lingering user managers may run an instance, but cannot approve operations without an eligible graphical session. All instances share the TPM's hardware dictionary-attack lockout.
 
-See the [state format and maintenance instructions](../src/state/README.txt). Stopping or removing the package preserves state. Service accounts, root and the kernel remain trusted; this isolates desktop users, not compromised service processes. See the [physical acceptance checklist](../VALIDATION.md#remaining-physical-acceptance).
+See the [state format and maintenance instructions](../src/state/README.txt). Stopping or removing the package preserves state. The service account, root and the kernel remain trusted. See the [physical acceptance checklist](../VALIDATION.md#remaining-physical-acceptance).
 
 ## Service sandbox
 
-The daemon and its native libraries use the package architecture's syscall ABI (`SystemCallArchitectures=native`). `SystemCallFilter=~@debug` denies debugging and tracing syscalls, including `ptrace`, `perf_event_open` and `pidfd_getfd`. The daemon does not launch compatibility binaries or use these interfaces; TPM device I/O, UHID, local D-Bus and GLib event handling remain available. These controls require systemd built with seccomp support to enforce syscall restrictions.
+The daemon uses the native syscall ABI and the `@system-service` syscall allowlist, with `@debug` explicitly excluded. These controls require systemd built with seccomp support.
+
+Each instance sees only its own credential store under `/var/lib/fidophir-users`. An empty mount hides the parent directory's contents, and `StateDirectory=` makes the instance's existing store visible and writable inside that mount.
 
 ## Crash recovery
 
