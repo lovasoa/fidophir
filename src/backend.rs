@@ -9,7 +9,7 @@ use crate::{
 };
 use log::error;
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     path::PathBuf,
     rc::Rc,
     sync::mpsc::{self, SyncSender},
@@ -33,7 +33,6 @@ struct Inner {
     worker: Option<std::thread::JoinHandle<()>>,
     io: Rc<dyn HostServices>,
     grant: RefCell<Option<Grant>>,
-    tpm_lockout: Cell<bool>,
 }
 impl Drop for Inner {
     fn drop(&mut self) {
@@ -91,7 +90,6 @@ impl Backend {
             worker: Some(worker),
             io,
             grant: RefCell::new(None),
-            tpm_lockout: Cell::new(false),
         })))
     }
 
@@ -174,10 +172,6 @@ impl Backend {
             .ok_or(BackendError::AuthorizationRequired)
     }
 
-    pub fn take_tpm_lockout(&self) -> bool {
-        self.0.tpm_lockout.replace(false)
-    }
-
     pub(crate) fn verify(&mut self, hash: &[u8; 16]) -> BackendResult<bool> {
         self.clear();
         let expires_at_ms = boot_ms().saturating_add(PIN_AUTHORIZATION_LIFETIME_MS);
@@ -195,9 +189,8 @@ impl Backend {
             Err(e) => Err(e),
         }) {
             Err(BackendError::PinBlocked) => {
-                self.0.tpm_lockout.set(true);
                 // The TPM definitively rejected the command before checking the PIN.
-                // Restore only this durably charged attempt; uncertain failures stay charged.
+                // OpenSK refunds this durably charged attempt.
                 match self.run(false, |tpm, _| tpm.lockout_interval()) {
                     Ok(Some(seconds)) if seconds > 0 => log::warn!(
                         "TPM is temporarily locked; the configured recovery interval is {seconds} seconds per counter decrement, not an exact remaining wait; TPM resets may delay recovery; do not retry until it recovers; restarting Fidophir does not clear TPM lockout"
@@ -249,15 +242,6 @@ impl Backend {
         Ok(key)
     }
 
-    pub fn matches_authorized_pin(&self, candidate: &[u8; 16]) -> Option<bool> {
-        use p256::elliptic_curve::subtle::ConstantTimeEq;
-        self.0
-            .grant
-            .borrow()
-            .as_ref()
-            .map(|grant| bool::from(grant.pin_hash.ct_eq(candidate)))
-    }
-
     pub fn clear(&self) {
         self.0.grant.borrow_mut().take();
     }
@@ -307,7 +291,6 @@ mod tests {
             worker: None,
             io: crate::io::Io::shared(),
             grant: RefCell::new(None),
-            tpm_lockout: Cell::new(false),
         }))
     }
 

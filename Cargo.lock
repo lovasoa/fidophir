@@ -697,7 +697,7 @@ dependencies = [
 [[package]]
 name = "opensk"
 version = "0.1.0"
-source = "git+https://github.com/google/OpenSK.git?branch=develop#f53621c33a02eee001cae82a87aa719fca61565b"
+source = "git+https://github.com/lovasoa/OpenSK.git?branch=pin-key-store-api#87a04cfd2f8026184c3c0925f00c09ef0b5cceb6"
 dependencies = [
  "aes",
  "arrayref",
@@ -1000,7 +1000,7 @@ dependencies = [
 [[package]]
 name = "sk-cbor"
 version = "0.2.0"
-source = "git+https://github.com/google/OpenSK.git?branch=develop#f53621c33a02eee001cae82a87aa719fca61565b"
+source = "git+https://github.com/lovasoa/OpenSK.git?branch=pin-key-store-api#87a04cfd2f8026184c3c0925f00c09ef0b5cceb6"
 
 [[package]]
 name = "slab"

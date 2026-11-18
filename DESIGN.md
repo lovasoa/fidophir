@@ -6,12 +6,12 @@ Fidophir is an experimental Linux host for the [OpenSK](https://github.com/googl
 
 - `src/runtime.rs` selects and constructs the host services. This is the only module with test feature selection; the integration binary selects simulator transport and fixed or desktop approval here.
 - `src/core.rs`, `src/backend.rs`, `src/tpm.rs`, and `src/state/` expose host errors, authorization, TPM operations and credential records without OpenSK imports. `HostServices` supplies cancellation and event pumping; `CredentialCodec` supplies credential serialization.
-- `src/opensk_adapter/env.rs` implements OpenSK's environment using injected services. `storage.rs` implements `Persist` and `KeyStore`, translates errors and owns the TPM-lockout retry refund. `credential.rs` converts protocol credentials to host records. `crypto.rs` implements static signing traits through `scope.rs`.
+- `src/opensk_adapter/env.rs` implements OpenSK's environment using injected services. `storage.rs` implements `Persist` and `KeyStore`, translates errors, including TPM lockout for OpenSK's retry refund. `credential.rs` converts protocol credentials to host records. `crypto.rs` implements static signing traits through `scope.rs`.
 - `src/main.rs` runs the production protocol loop; `src/bin/integration.rs` supplies the integration transport.
 - `src/io.rs` exposes a virtual HID device. `src/backend.rs` runs blocking storage and TPM work without stopping protocol keepalives.
 - `src/tpm.rs` creates and uses TPM keys. `src/state.rs` stores records on disk.
 - `src/approval.rs` asks login1 and polkit for a fresh approval in the instance user's local, active, unlocked graphical session.
-- [`src/opensk_adapter.rs`](src/opensk_adapter.rs) documents the integration with upstream OpenSK `develop`. `Cargo.lock` pins the exact Git commit and transitive dependencies.
+- [`src/opensk_adapter.rs`](src/opensk_adapter.rs) documents the integration with OpenSK's `pin-key-store-api` branch. `Cargo.lock` pins the exact Git commit and transitive dependencies.
 - [Packaging](packaging/README.md) provides the service, permissions and build recipes.
 
 The production profile supports discoverable and non-discoverable ES256 credentials, each with a limit of 300, a minimum PIN length of four Unicode code points, ClientPIN v2, and required user verification. Non-discoverable credentials use random 32-byte IDs and local TPM-wrapped key records; they are not enumerated during account discovery. It uses a zero signature counter, zero AAGUID and self-attestation. It does not support CTAP1, TPM key export or sync. Compatibility with particular browsers and websites remains to be tested.
@@ -34,13 +34,13 @@ Read the command path from `main.rs` → `runtime::system` → `Authenticator::p
 
 `integration-tests` enables the integration executable and OpenSK's standard-library support. `systemd-tests` changes the centrally selected system TPM transport for disposable package tests. Neither feature changes backend, storage, approval or packet-processing logic. `PacketTransport` supports UHID and in-memory reports through the same interface; `LinuxEnv::build` accepts already constructed services.
 
-OpenSK owns PIN policy, request decryption, token authentication and retry accounting. Fidophir verifies candidates and stores PINs using the public `KeyStore` and `Persist` interfaces. The backend holds no persistent software PIN verifier. A forced-change comparison uses the current command's accepted candidate without another TPM attempt. Backend errors are distinct from incorrect PINs.
+OpenSK owns PIN policy, request decryption, token authentication and retry accounting. Fidophir verifies candidates and stores PINs using the public `KeyStore` interface. The backend holds no persistent software PIN verifier. OpenSK handles forced-change reuse comparisons without another backend call. Backend errors are distinct from incorrect PINs.
 
 The backend holds an optional TPM grant. New PIN attempts clear it before OpenSK processes the request; verification creates it only after TPM acceptance. PIN storage and failed commands clear it. A silent lookup with no matching credential preserves it so registration can continue with the same token. First PIN setup calls OpenSK's public presence helper before forwarding, which may prompt before an invalid new PIN is rejected.
 
 Static crypto callbacks resolve only the currently dispatched backend through a scoped thread-local pointer. The pointer grants no authority, nested dispatch fails closed, and no borrow is held across TPM work or desktop callbacks. Existing wrapped-key import/export follows OpenSK's documented hardware-key interface.
 
-The integration uses OpenSK's public interfaces. Fidophir's tests cover its TPM operations, storage, desktop approval, authorization lifetime and installed packages. They do not validate OpenSK's internal call order or reproduce its protocol conformance tests. One remaining adaptation refunds a retry after a definitive TPM lockout; it currently accesses OpenSK's retry storage and should move into an upstream interface for hardware verification failures.
+The integration uses OpenSK's public interfaces. Fidophir's tests cover its TPM operations, storage, desktop approval, authorization lifetime and installed packages. They do not validate OpenSK's internal call order or reproduce its protocol conformance tests. OpenSK handles retry refunds when the backend reports temporary hardware lockout.
 
 ## Storage and failure handling
 

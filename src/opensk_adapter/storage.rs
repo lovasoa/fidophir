@@ -11,7 +11,6 @@ use opensk::{
         status_code::{Ctap2StatusCode as Status, CtapResult},
     },
 };
-const CONFIGURED_PIN_MARKER: [u8; 16] = [0; 16];
 #[derive(Clone)]
 pub struct Storage(pub Backend);
 impl Storage {
@@ -87,17 +86,6 @@ impl Persist for Storage {
     fn global_signature_counter(&self) -> CtapResult<u32> {
         Ok(0)
     }
-    fn pin_hash(&self) -> CtapResult<Option<[u8; 16]>> {
-        Ok(self
-            .0
-            .has_pin()
-            .map_err(status)?
-            .then_some(CONFIGURED_PIN_MARKER))
-    }
-    fn set_pin(&mut self, hash: &[u8; 16], length: u8) -> CtapResult<()> {
-        self.0.store_pin(hash, length).map_err(status)?;
-        self.remove(opensk::api::persist::keys::FORCE_PIN_CHANGE)
-    }
 }
 
 impl KeyStore for Storage {
@@ -139,32 +127,13 @@ impl KeyStore for Storage {
             .map(|key| Secret::from_exposed_secret(*key))
             .map_err(|_| key_store::Error)
     }
-    fn encrypt_pin_hash(
-        &mut self,
-        plain: &[u8; 16],
-    ) -> std::result::Result<[u8; 16], key_store::Error> {
-        Ok(*plain)
+    fn has_pin(&mut self) -> CtapResult<bool> {
+        self.0.has_pin().map_err(status)
     }
-    fn verify_pin_hash(
-        &mut self,
-        _stored: &[u8; 16],
-        candidate: &[u8; 16],
-    ) -> std::result::Result<bool, key_store::Error> {
-        if let Some(matches) = self.0.matches_authorized_pin(candidate) {
-            return Ok(matches);
-        }
-        match self.0.verify(candidate) {
-            Err(core::BackendError::PinBlocked) => {
-                // OpenSK durably charged an attempt; a TPM lockout never checked it.
-                let failures = self.pin_fails().map_err(|_| key_store::Error)?;
-                self.write_record(
-                    opensk::api::persist::keys::PIN_RETRIES,
-                    vec![failures.saturating_sub(1)],
-                )
-                .map_err(|_| key_store::Error)?;
-                Err(key_store::Error)
-            }
-            answer => answer.map_err(|_| key_store::Error),
-        }
+    fn verify_pin_hash(&mut self, candidate: &[u8; 16]) -> CtapResult<bool> {
+        self.0.verify(candidate).map_err(status)
+    }
+    fn store_pin(&mut self, hash: &[u8; 16], length: u8) -> CtapResult<()> {
+        self.0.store_pin(hash, length).map_err(status)
     }
 }
