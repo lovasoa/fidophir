@@ -73,6 +73,7 @@ jobs:
         if: steps.pr.outputs.pull-request-number && steps.pr.outputs.pull-request-operation != 'closed'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
+          retries: 3
           script: |
             const {owner, repo} = context.repo;
             await github.rest.actions.createWorkflowDispatch({owner, repo, workflow_id: 'packages.yml',
