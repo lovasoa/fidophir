@@ -700,7 +700,7 @@ dependencies = [
 [[package]]
 name = "opensk"
 version = "0.1.0"
-source = "git+https://github.com/google/OpenSK.git?branch=develop#4437e45c6c7541ebebf8e6986cede4adefbabaf6"
+source = "git+https://github.com/google/OpenSK.git?branch=develop#94b464f12d27429b7b788f222b99c14474e825ea"
 dependencies = [
  "aes",
  "arrayref",
@@ -1003,7 +1003,7 @@ dependencies = [
 [[package]]
 name = "sk-cbor"
 version = "0.2.0"
-source = "git+https://github.com/google/OpenSK.git?branch=develop#4437e45c6c7541ebebf8e6986cede4adefbabaf6"
+source = "git+https://github.com/google/OpenSK.git?branch=develop#94b464f12d27429b7b788f222b99c14474e825ea"
 
 [[package]]
 name = "slab"
